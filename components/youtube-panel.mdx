@@ -1,0 +1,231 @@
+---
+title: 'YoutubePanel'
+description: 'Video player for reference choreography with download progress and extraction status'
+---
+
+The `YoutubePanel` component displays a reference video with streaming download progress, pose extraction status, segmentation progress, and playback controls. It exposes imperative methods via `forwardRef` for external control.
+
+## Features
+
+- **Streaming Download**: Real-time progress display during yt-dlp download
+- **Dual Progress Bars**: Shows both pose extraction and segmentation progress in parallel
+- **AI Generation Support**: Multi-phase progress (researching → synthesizing → generating → downloading)
+- **Video Playback**: HTML5 video with HTTP range request support
+- **Imperative API**: Exposed methods for seeking, playback rate control, frame capture
+- **Aspect Ratio Detection**: Reports video dimensions for overlay calculations
+
+## Usage
+
+```tsx
+import YoutubePanel from "./components/YoutubePanel";
+import type { YoutubePanelHandle } from "./components/YoutubePanel";
+
+function App() {
+  const youtubePanelRef = useRef<YoutubePanelHandle>(null);
+
+  const handleSeek = () => {
+    youtubePanelRef.current?.seekTo(30); // Jump to 30 seconds
+  };
+
+  const handleSlowMotion = () => {
+    youtubePanelRef.current?.setPlaybackRate(0.5); // Half speed
+  };
+
+  return (
+    <YoutubePanel
+      ref={youtubePanelRef}
+      videoId="dQw4w9WgXcQ"
+      downloadStatus="done"
+      downloadProgress={100}
+      downloadError={null}
+      extractionStatus="done"
+      extractionProgress={100}
+      segmentationStatus="done"
+      segmentationProgress={100}
+    />
+  );
+}
+```
+
+## Props
+
+<ParamField path="videoId" type="string | null" required>
+  YouTube video ID (11 characters). Null displays empty state with prompt.
+</ParamField>
+
+<ParamField path="downloadStatus" type="'idle' | 'downloading' | 'done' | 'error'" required>
+  Current download state. Controls which UI to display.
+</ParamField>
+
+<ParamField path="downloadProgress" type="number" required>
+  Download progress percentage (0-100). Shown during downloading state.
+</ParamField>
+
+<ParamField path="downloadError" type="string | null" required>
+  Error message if download failed. Displayed in error state.
+</ParamField>
+
+<ParamField path="extractionStatus" type="'idle' | 'extracting' | 'done'" required>
+  Pose extraction pipeline status. Shows "Analyzing Moves" progress bar.
+</ParamField>
+
+<ParamField path="extractionProgress" type="number" required>
+  Extraction progress percentage (0-100).
+</ParamField>
+
+<ParamField path="segmentationStatus" type="'idle' | 'segmenting' | 'done' | 'error' | 'unavailable'">
+  Background removal pipeline status. Shows "Segmenting Dancer" progress bar.
+</ParamField>
+
+<ParamField path="segmentationProgress" type="number">
+  Segmentation progress percentage (0-100).
+</ParamField>
+
+<ParamField path="generatePhase" type="string">
+  AI generation phase label: 'researching', 'synthesizing', 'generating', or 'downloading'. Shown during AI video generation.
+</ParamField>
+
+## Imperative Methods (via ref)
+
+<ParamField path="getCurrentTime" type="() => number">
+  Returns current video playback position in seconds.
+</ParamField>
+
+<ParamField path="getDuration" type="() => number">
+  Returns total video duration in seconds.
+</ParamField>
+
+<ParamField path="seekTo" type="(time: number) => void">
+  Seeks video to specified time in seconds.
+</ParamField>
+
+<ParamField path="setPlaybackRate" type="(rate: number) => void">
+  Sets playback speed (0.25 to 2.0). Example: 0.5 = half speed, 2.0 = double speed.
+</ParamField>
+
+<ParamField path="isPaused" type="() => boolean">
+  Returns true if video is currently paused.
+</ParamField>
+
+<ParamField path="getVideoAspectRatio" type="() => number">
+  Returns video aspect ratio (width/height). Defaults to 16/9 if not loaded.
+</ParamField>
+
+<ParamField path="captureFrame" type="() => string | null">
+  Captures current video frame as base64 JPEG. Returns null if video not ready.
+</ParamField>
+
+<ParamField path="togglePlayPause" type="() => void">
+  Toggles between play and pause states.
+</ParamField>
+
+## TypeScript Interfaces
+
+```typescript
+type DownloadStatus = "idle" | "downloading" | "done" | "error";
+type ExtractionStatus = "idle" | "extracting" | "done";
+type SegmentationStatus = "idle" | "segmenting" | "done" | "error" | "unavailable";
+
+export type YoutubePanelHandle = {
+  getCurrentTime: () => number;
+  getDuration: () => number;
+  seekTo: (time: number) => void;
+  setPlaybackRate: (rate: number) => void;
+  isPaused: () => boolean;
+  getVideoAspectRatio: () => number;
+  captureFrame: () => string | null;
+  togglePlayPause: () => void;
+};
+
+type Props = {
+  videoId: string | null;
+  downloadStatus: DownloadStatus;
+  downloadProgress: number;
+  downloadError: string | null;
+  extractionStatus: ExtractionStatus;
+  extractionProgress: number;
+  segmentationStatus?: SegmentationStatus;
+  segmentationProgress?: number;
+  generatePhase?: string;
+};
+```
+
+## UI States
+
+### Idle State
+
+Displayed when `videoId` is null or `downloadStatus === "idle"`:
+
+- Large play icon (40px)
+- Prompt: "Paste a YouTube URL or generate with AI"
+- Cyan neon borders with breathing animation
+
+### Downloading State
+
+Displayed when `downloadStatus === "downloading"`:
+
+- Phase label (e.g., "Researching the Web" for AI generation)
+- Progress bar (256px width)
+- Large percentage display
+- Cyan neon accent colors
+
+### Extraction/Segmentation State
+
+Displayed when `extractionStatus === "extracting"` or segmentation is pending:
+
+- **Dual progress bars** if both running:
+  - "Analyzing Moves" (violet gradient)
+  - "Segmenting Dancer" (green gradient)
+- Averaged percentage display
+- "Preparing Your Dance" header
+
+### Error State
+
+Displayed when `downloadStatus === "error"`:
+
+- Red neon borders
+- "Error" label in Audiowide font
+- Error message display
+
+### Playing State
+
+Displayed when `downloadStatus === "done"` and extraction/segmentation complete:
+
+- HTML5 `<video>` element with native controls
+- Video source: `/api/video/{videoId}`
+- Cyan HUD corners
+- "Reference" panel label
+- Green "Segmented" badge (if segmentation successful)
+
+## Example from page.tsx
+
+```tsx
+// app/page.tsx:1027-1038
+<YoutubePanel
+  ref={youtubePanelRef}
+  videoId={videoId}
+  downloadStatus={downloadStatus}
+  downloadProgress={downloadProgress}
+  downloadError={downloadError}
+  extractionStatus={extractionStatus}
+  extractionProgress={extractionProgress}
+  segmentationStatus={segmentationStatus}
+  segmentationProgress={segmentationProgress}
+  generatePhase={generatePhase}
+/>
+```
+
+## Styling
+
+- **Border**: Cyan neon glow (`border-neon-cyan/15`)
+- **HUD Corners**: Cyan corner brackets (4x4px)
+- **Panel Label**: "Reference" (top-left, 8px uppercase, Audiowide)
+- **Progress Bars**: Dual-gradient bars for extraction (violet) and segmentation (green)
+- **Video**: Object-fit contain, autoplay enabled
+
+## Related Files
+
+- `app/api/download/route.ts` - SSE endpoint for download progress
+- `app/api/video/[id]/route.ts` - Video streaming endpoint with range requests
+- `app/lib/frameCapture.ts` - Video frame capture utility
+- `app/lib/videoPoseExtractor.ts` - Client-side pose extraction pipeline

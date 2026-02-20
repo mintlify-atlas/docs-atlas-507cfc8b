@@ -1,0 +1,388 @@
+---
+title: Pose Scoring System
+description: Deep dive into Jiggle Wiggle's multi-signal scoring algorithm with geometric pose comparison, Groq vision AI, EMA smoothing, and hit tier classification
+---
+
+## Overview
+
+Jiggle Wiggle uses a sophisticated multi-signal scoring system that combines geometric pose comparison, AI vision analysis, and motion heuristics to evaluate your performance in real-time at 30fps.
+
+<Info>
+  The scoring system is **choreography-agnostic** — it works with any YouTube video by dynamically comparing your pose against the reference timeline.
+</Info>
+
+## Scoring Signals
+
+Three complementary scoring signals are blended to produce the final score:
+
+| Signal | Weight | Source | Update Rate |
+|--------|--------|--------|-------------|
+| **Geometric Pose Comparison** | 50-80% | Landmark distance matching per limb | 30fps |
+| **Groq Vision Scoring** | 40% | Periodic screenshot comparison | ~3s |
+| **Heuristic Body Metrics** | 10-20% | Arm height, symmetry, motion energy | 30fps |
+
+### 1. Geometric Pose Comparison
+
+The primary scoring mechanism compares your normalized pose landmarks against the closest reference frame.
+
+<CodeGroup>
+```typescript Pose Normalization (poseComparison.ts:49)
+export function normalizePose(
+  landmarks: NormalizedLandmark[],
+  aspectRatio: number = 1
+): NormalizedLandmark[] {
+  const lHip = landmarks[23];
+  const rHip = landmarks[24];
+  const lShoulder = landmarks[11];
+  const rShoulder = landmarks[12];
+
+  // Correct x-coordinates to square space
+  const corrected = landmarks.map((lm) => ({
+    ...lm,
+    x: lm.x * aspectRatio,
+  }));
+
+  // Center hip midpoint at (0.5, 0.6) and scale by torso length
+  const torsoLen = Math.sqrt(
+    (shoulderMidX - hipMidX) ** 2 + (shoulderMidY - hipMidY) ** 2
+  );
+  const TARGET_TORSO = 0.25;
+  const scale = torsoLen > 0.01 ? TARGET_TORSO / torsoLen : 1;
+
+  // ... normalization logic
+}
+```
+
+```typescript Limb Groups
+const LIMB_JOINTS: Record<string, number[]> = {
+  rightArm: [12, 14, 16],  // Shoulder, elbow, wrist
+  leftArm: [11, 13, 15],
+  rightLeg: [24, 26, 28],  // Hip, knee, ankle
+  leftLeg: [23, 25, 27],
+  torso: [11, 12, 23, 24], // Shoulders + hips
+};
+```
+
+```typescript Distance Thresholds (poseComparison.ts:37)
+const THRESH_GOOD = 0.06;  // Green: excellent match
+const THRESH_OK = 0.12;    // Yellow: acceptable match
+// Red: poor match (> THRESH_OK)
+```
+</CodeGroup>
+
+#### Per-Limb Scoring
+
+Each limb (arms, legs, torso) is scored independently based on average landmark distance:
+
+```typescript Per-Limb Score Calculation (poseComparison.ts:221)
+// Score: 100 at distance 0, 0 at distance THRESH_OK*2
+limbScores[limb] = Math.max(0, Math.min(100, 
+  Math.round(100 * (1 - avg / (THRESH_OK * 2)))
+));
+```
+
+<Note>
+  **Reference-Centric Comparison**
+  
+  Only landmarks visible in the reference pose are evaluated. If the reference has a landmark you're missing, you're penalized. Extra landmarks you have are ignored.
+</Note>
+
+### 2. Groq Vision Scoring
+
+Periodic screenshot comparison using Groq's vision model provides an AI perspective:
+
+<CodeGroup>
+```typescript Groq Integration (groqScoring.ts:8)
+const EMA_ALPHA = 0.25;
+const MAX_CONSECUTIVE_ERRORS = 3;
+
+let smoothedScore: number | null = null;
+
+export function startGroqScoring(
+  captureReference: () => string | null,
+  captureWebcam: () => string | null,
+  onScore: (result: GroqScoreResult) => void,
+  intervalMs: number = 3000  // 3 second intervals
+): () => void {
+  // ...
+}
+```
+
+```typescript EMA Smoothing (groqScoring.ts:70)
+if (smoothedScore === null) {
+  smoothedScore = rawScore;
+} else {
+  // Exponential Moving Average with alpha 0.25
+  smoothedScore = EMA_ALPHA * rawScore + (1 - EMA_ALPHA) * smoothedScore;
+}
+```
+</CodeGroup>
+
+<Warning>
+  Vision scoring runs every 3 seconds to avoid API rate limits. It provides a secondary validation signal but is not the primary scoring mechanism.
+</Warning>
+
+### 3. Motion Heuristics
+
+Real-time analysis of body metrics:
+
+```typescript Motion Energy Calculation (scoring.ts:96)
+if (history.length >= 3) {
+  const prev = history[history.length - 3];
+  const curr = history[history.length - 1];
+  let totalDisp = 0;
+  const count = Math.min(prev.length, curr.length);
+  
+  for (let i = 0; i < count; i++) {
+    const dx = curr[i].x - prev[i].x;
+    const dy = curr[i].y - prev[i].y;
+    totalDisp += Math.sqrt(dx * dx + dy * dy);
+  }
+  const avgDisp = totalDisp / count;
+
+  if (avgDisp < 0.008) {
+    score -= 12;  // Not moving enough
+    issues.push("Not moving enough");
+  } else if (avgDisp > 0.12) {
+    score -= 8;   // Moving too chaotically
+    issues.push("Moving too chaotically");
+  } else {
+    score += 10;  // Good motion energy
+  }
+}
+```
+
+## EMA Smoothing
+
+Raw scores are smoothed using an Exponential Moving Average to suppress jitter:
+
+<CodeGroup>
+```typescript EMA Configuration (page.tsx:76)
+const SCORE_EMA_ALPHA = 0.15;
+const DEAD_ZONE_THRESHOLD = 2;
+```
+
+```typescript Score Smoothing (page.tsx:806)
+// 4. EMA smoothing + dead zone to suppress jitter
+const smoothed = 
+  smoothedScoreRef.current * (1 - SCORE_EMA_ALPHA) + 
+  finalScore * SCORE_EMA_ALPHA;
+
+// Dead zone: ignore changes < 2 points
+if (Math.abs(smoothed - smoothedScoreRef.current) >= DEAD_ZONE_THRESHOLD) {
+  smoothedScoreRef.current = smoothed;
+}
+```
+</CodeGroup>
+
+<Tip>
+  **Why EMA?**
+  
+  - **Alpha = 0.15**: Low alpha means heavy smoothing, preventing score from jumping wildly
+  - **Dead Zone = 2**: Small fluctuations (±2 points) are ignored to reduce visual noise
+  - **Result**: Stable score display that still responds to real performance changes
+</Tip>
+
+## Hit Tier System
+
+When the video passes a key pose timestamp, the smoothed score is converted to a hit tier:
+
+<CardGroup cols={2}>
+  <Card title="PERFECT" icon="star" color="#39ff14">
+    **Score: 90+**
+    
+    Points: +25
+    
+    Excellent match across all limbs
+  </Card>
+  
+  <Card title="GREAT" icon="fire" color="#ffe100">
+    **Score: 80-89**
+    
+    Points: +20
+    
+    Strong overall performance
+  </Card>
+  
+  <Card title="OK" icon="circle-check" color="#00b4ff">
+    **Score: 60-79**
+    
+    Points: +15
+    
+    Acceptable form
+  </Card>
+  
+  <Card title="ALMOST" icon="triangle-exclamation" color="#ff6400">
+    **Score: 40-59**
+    
+    Points: +10
+    
+    Needs improvement
+  </Card>
+  
+  <Card title="MISS" icon="xmark" color="#ff003c">
+    **Score: &lt;40**
+    
+    Points: 0
+    
+    Poor match or pose not detected
+  </Card>
+</CardGroup>
+
+```typescript Hit Tier Classification (ScorePopup.tsx:337)
+export function getScoreType(score: number): ScoreType {
+  if (score >= 90) return "perfect";
+  if (score >= 80) return "great";
+  if (score >= 60) return "ok";
+  if (score >= 40) return "almost";
+  return "miss";
+}
+
+export const SCORE_POINTS: Record<ScoreType, number> = {
+  perfect: 25,
+  great: 20,
+  ok: 15,
+  almost: 10,
+  miss: 0,
+};
+```
+
+## Combo Streaks
+
+Consecutive non-miss hits trigger bonus celebrations:
+
+<Steps>
+  <Step title="Hit Detection">
+    Every time the video crosses a key pose timestamp, a hit is registered
+  </Step>
+  
+  <Step title="Streak Counter">
+    Non-miss hits (OK, GREAT, PERFECT, ALMOST) increment the streak counter
+  </Step>
+  
+  <Step title="Combo Trigger">
+    Every 5th consecutive hit triggers a gold streak celebration with particle effects
+  </Step>
+  
+  <Step title="Reset">
+    A MISS resets the streak counter to 0
+  </Step>
+</Steps>
+
+## Pose Summary for AI Coach
+
+A compact pose summary is generated for the AI coach:
+
+```typescript PoseSummary Interface (scoring.ts:18)
+export type PoseSummary = {
+  score: number;              // Current smoothed score
+  confidence: number;         // Avg landmark visibility
+  body: {
+    armHeight: number;        // Relative wrist-to-shoulder height
+    armSymmetry: number;      // Left-right wrist height difference
+    motionEnergy: number;     // Movement velocity
+    torsoLean: number;        // Forward/backward lean
+    kneeBend: number;         // Crouch depth
+  };
+  issues: string[];           // ["Arms too low", "Arms uneven"]
+  trend: "improving" | "declining" | "steady";
+  sessionSeconds: number;
+  reference?: {               // Present when comparing to video
+    matchScore: number;
+    limbScores: Record<string, number>;
+    worstLimb: string;
+    refPoseLabel: string;     // "Arms up", "Star jump", etc.
+  };
+};
+```
+
+## Example: Full Scoring Pipeline
+
+```typescript Scoring Flow (page.tsx:800)
+// 1. Get geometric comparison score (50% weight)
+const geometricComparison = comparePosesDetailed(
+  refFrame.landmarks,
+  landmarks,
+  REF_ASPECT_RATIO,
+  WEBCAM_ASPECT_RATIO
+);
+let finalScore = geometricComparison.matchScore * 0.5;
+
+// 2. Add heuristic score (20% weight)
+const heuristicFrame = computeScore(landmarks);
+finalScore += heuristicFrame.score * 0.2;
+
+// 3. Blend with Groq vision score (30% weight)
+if (groqScoreRef.current !== null) {
+  finalScore += groqScoreRef.current * 0.3;
+} else {
+  finalScore += geometricComparison.matchScore * 0.3;
+}
+
+// 4. EMA smoothing + dead zone
+const smoothed = 
+  smoothedScoreRef.current * (1 - SCORE_EMA_ALPHA) + 
+  finalScore * SCORE_EMA_ALPHA;
+
+if (Math.abs(smoothed - smoothedScoreRef.current) >= DEAD_ZONE_THRESHOLD) {
+  smoothedScoreRef.current = smoothed;
+}
+
+// 5. Classify into hit tier
+const tier = getScoreType(smoothedScoreRef.current);
+```
+
+## Debugging Scores
+
+Use the pose summary to understand scoring issues:
+
+<Accordion title="Low Confidence">
+  ```json
+  {
+    "confidence": 0.42,
+    "issues": ["Low pose confidence"]
+  }
+  ```
+  
+  **Cause:** Poor lighting, camera angle, or partial occlusion
+  
+  **Fix:** Ensure full body is visible and well-lit
+</Accordion>
+
+<Accordion title="Arms Too Low">
+  ```json
+  {
+    "body": { "armHeight": 0.18 },
+    "issues": ["Arms too low"]
+  }
+  ```
+  
+  **Cause:** Wrists below shoulders when they should be raised
+  
+  **Fix:** Match the reference pose's arm position
+</Accordion>
+
+<Accordion title="Not Moving Enough">
+  ```json
+  {
+    "body": { "motionEnergy": 0.005 },
+    "issues": ["Not moving enough"]
+  }
+  ```
+  
+  **Cause:** Static pose when reference is dynamic
+  
+  **Fix:** Keep moving with the rhythm of the video
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="AI Coaching" icon="robot" href="/features/ai-coaching">
+    Learn how the AI coach uses pose summaries to provide feedback
+  </Card>
+  
+  <Card title="Performance Reports" icon="chart-bar" href="/features/performance-reports">
+    See how scores translate to letter grades in the final report
+  </Card>
+</CardGroup>

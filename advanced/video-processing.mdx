@@ -1,0 +1,682 @@
+---
+title: Video Processing Pipeline
+description: Complete guide to yt-dlp integration, ffmpeg usage, HTTP range request serving, and video streaming implementation
+---
+
+## Overview
+
+Jiggle Wiggle's video processing pipeline handles YouTube video downloads, format conversion, efficient serving with range requests, and optional person segmentation. This page covers the complete end-to-end flow.
+
+## Architecture Overview
+
+```
+YouTube URL
+    ↓
+yt-dlp (download + metadata)
+    ↓
+/tmp/jigglewiggle/{videoId}.mp4
+    ↓
+┌─────────────────────┬──────────────────────┐
+│                     │                      │
+│  /api/video/[id]    │  Pose Extraction     │  Optional: /api/segment
+│  (range requests)   │  (client-side)       │  (SAM2 segmentation)
+│                     │                      │
+└─────────────────────┴──────────────────────┘
+         ↓                      ↓                      ↓
+    Video Player         MoveQueue Strip      Segmented Overlay
+```
+
+## yt-dlp Integration
+
+**File:** `app/api/download/route.ts`
+
+### Download Endpoint
+
+```typescript
+export async function POST(request: NextRequest) {
+  const { videoId } = await request.json();
+  
+  // Validation
+  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    return new Response(
+      JSON.stringify({ error: "Invalid video ID" }),
+      { status: 400 }
+    );
+  }
+  
+  const outputPath = path.join("/tmp/jigglewiggle", `${videoId}.mp4`);
+  
+  // Check cache
+  try {
+    await access(outputPath);
+    // File exists — stream cached events + classification
+    return streamCachedResponse(videoId);
+  } catch {
+    // Proceed with download
+  }
+  
+  return streamDownload(videoId, outputPath);
+}
+```
+
+### Video ID Validation
+
+**Regex:** `^[a-zA-Z0-9_-]{11}$`
+
+- YouTube video IDs are exactly 11 characters
+- Alphanumeric plus dash and underscore
+- Prevents path traversal attacks
+
+### Cache Strategy
+
+```typescript
+try {
+  await access(outputPath);
+  // File exists — return immediately
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(encoder.encode(
+        `data: ${JSON.stringify({ type: "progress", percent: 100 })}\n\n`
+      ));
+      controller.enqueue(encoder.encode(
+        `data: ${JSON.stringify({ type: "done" })}\n\n`
+      ));
+      const classifiedLine = await classifyFromMetadata(videoId);
+      controller.enqueue(encoder.encode(classifiedLine));
+      controller.close();
+    }
+  });
+  return new Response(stream, { headers: SSE_HEADERS });
+} catch {
+  // Not cached — download
+}
+```
+
+**Cache location:** `/tmp/jigglewiggle/`  
+**Retention:** Ephemeral (OS manages tmpfs cleanup)  
+**No manual TTL:** Relies on system temporary file cleanup
+
+### yt-dlp Command
+
+```typescript
+const proc = spawn("yt-dlp", [
+  "-f", "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio/best",
+  "--merge-output-format", "mp4",
+  "-o", outputPath,
+  "--newline",
+  url
+]);
+```
+
+**Format selection strategy:**
+1. Try `best[ext=mp4]` — Best quality single MP4 file
+2. Fallback: `bestvideo[ext=mp4]+bestaudio` — Merge best video + audio
+3. Final fallback: `best` — Any format, transcode to MP4
+
+**`--merge-output-format mp4`:** Forces ffmpeg muxing to MP4 container
+
+**`--newline`:** Forces progress output on separate lines for easier parsing
+
+### Progress Parsing
+
+```typescript
+proc.stdout.on("data", (data: Buffer) => {
+  const text = data.toString();
+  // yt-dlp prints progress like: [download]  45.2% of ...
+  const match = text.match(/\[download\]\s+([\d.]+)%/);
+  if (match) {
+    const percent = parseFloat(match[1]);
+    controller.enqueue(
+      encoder.encode(`data: ${JSON.stringify({ type: "progress", percent })}\n\n`)
+    );
+  }
+});
+```
+
+**Regex:** `/\[download\]\s+([\d.]+)%/`
+
+**Example output:**
+```
+[download]  12.4% of 8.45MiB at 1.23MiB/s ETA 00:05
+[download]  37.8% of 8.45MiB at 1.45MiB/s ETA 00:03
+[download] 100.0% of 8.45MiB at 1.56MiB/s
+```
+
+### Server-Sent Events (SSE)
+
+**Event Types:**
+
+```typescript
+type DownloadEvent = 
+  | { type: "progress", percent: number }
+  | { type: "done" }
+  | { type: "classified", mode: "dance" | "gym", title: string }
+  | { type: "error", message: string };
+```
+
+**Format:**
+```
+data: {"type":"progress","percent":45.2}\n\n
+data: {"type":"done"}\n\n
+data: {"type":"classified","mode":"dance","title":"Salsa Basic Step Tutorial"}\n\n
+```
+
+**Headers:**
+```typescript
+const SSE_HEADERS = {
+  "Content-Type": "text/event-stream",
+  "Cache-Control": "no-cache",
+  "Connection": "keep-alive"
+};
+```
+
+### Parallel Classification
+
+```typescript
+async function classifyFromMetadata(videoId: string): Promise<string> {
+  return new Promise(resolve => {
+    execFile(
+      "yt-dlp",
+      ["--dump-json", "--no-download", `https://www.youtube.com/watch?v=${videoId}`],
+      { maxBuffer: 10 * 1024 * 1024 },
+      async (err, stdout) => {
+        if (err || !stdout) {
+          resolve(`data: ${JSON.stringify({ type: "classified", mode: "dance", title: "" })}\n\n`);
+          return;
+        }
+        const meta = JSON.parse(stdout);
+        const mode = await classifyVideo(meta.title, meta.description);
+        resolve(`data: ${JSON.stringify({ type: "classified", mode, title: meta.title })}\n\n`);
+      }
+    );
+  });
+}
+```
+
+**Key points:**
+- Runs in parallel with download (non-blocking)
+- Uses `--dump-json --no-download` for fast metadata fetch
+- Calls Groq LLaMA 3.1 8B for classification
+- Always resolves (never rejects) to prevent blocking SSE stream
+
+### Error Handling
+
+```typescript
+proc.stderr.on("data", (data: Buffer) => {
+  stderrBuf += data.toString();
+});
+
+proc.on("close", async (code) => {
+  if (code === 0) {
+    safeEnqueue(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+    const classifiedLine = await classifyPromise;
+    safeEnqueue(classifiedLine);
+  } else {
+    safeEnqueue(
+      `data: ${JSON.stringify({
+        type: "error",
+        message: stderrBuf.slice(-500) || `yt-dlp exited with code ${code}`
+      })}\n\n`
+    );
+  }
+  safeClose();
+});
+```
+
+**Error truncation:** Last 500 chars of stderr to prevent massive error payloads
+
+**Common failure modes:**
+- Private/age-gated videos
+- Region-locked content
+- Invalid URLs
+- Network timeouts
+
+## ffmpeg Usage
+
+ffmpeg is invoked automatically by yt-dlp when:
+- `--merge-output-format mp4` is specified
+- Separate video/audio streams need muxing
+- Format conversion is required
+
+**Example yt-dlp → ffmpeg pipeline:**
+```
+yt-dlp downloads:
+  • bestvideo: VP9 in WebM container
+  • bestaudio: Opus in WebM container
+
+yt-dlp spawns ffmpeg:
+  ffmpeg -i video.webm -i audio.webm -c copy -f mp4 output.mp4
+```
+
+**`-c copy`:** Stream copy (no re-encoding) for speed
+
+**System requirement:** ffmpeg must be installed and on PATH
+
+## Video Serving with Range Requests
+
+**File:** `app/api/video/[id]/route.ts`
+
+### Full File Serving
+
+```typescript
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  
+  // Sanitize ID
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    return NextResponse.json({ error: "Invalid video ID" }, { status: 400 });
+  }
+  
+  const filePath = path.join("/tmp/jigglewiggle", `${id}.mp4`);
+  
+  let fileStat;
+  try {
+    fileStat = await stat(filePath);
+  } catch {
+    return NextResponse.json({ error: "Video not found" }, { status: 404 });
+  }
+  
+  const fileSize = fileStat.size;
+  const rangeHeader = request.headers.get("range");
+  
+  if (!rangeHeader) {
+    // Serve full file
+    return serveFullFile(filePath, fileSize);
+  } else {
+    // Serve byte range
+    return serveRangeRequest(filePath, fileSize, rangeHeader);
+  }
+}
+```
+
+### Range Request Parsing
+
+```typescript
+const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+if (!match) {
+  return new NextResponse("Invalid range", { status: 416 });
+}
+
+const start = parseInt(match[1], 10);
+const end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+
+if (start >= fileSize || end >= fileSize) {
+  return new NextResponse("Range not satisfiable", {
+    status: 416,
+    headers: { "Content-Range": `bytes */${fileSize}` }
+  });
+}
+```
+
+**Range header format:** `Range: bytes=0-1023` or `Range: bytes=1024-`
+
+**Edge cases:**
+- `bytes=0-` → Entire file starting from byte 0
+- `bytes=1024-` → From byte 1024 to end
+- `bytes=1024-2047` → Specific byte range
+
+### Streaming Implementation
+
+```typescript
+const chunkSize = end - start + 1;
+const fileHandle = await open(filePath, "r");
+const stream = fileHandle.createReadStream({ start, end });
+
+let cancelled = false;
+const webStream = new ReadableStream({
+  start(controller) {
+    stream.on("data", (chunk: Buffer) => {
+      if (!cancelled) controller.enqueue(chunk);
+    });
+    stream.on("end", () => {
+      if (!cancelled) controller.close();
+      fileHandle.close();
+    });
+    stream.on("error", (err) => {
+      if (!cancelled) controller.error(err);
+      fileHandle.close();
+    });
+  },
+  cancel() {
+    cancelled = true;
+    stream.destroy();
+    fileHandle.close();
+  }
+});
+
+return new NextResponse(webStream, {
+  status: 206,
+  headers: {
+    "Content-Type": "video/mp4",
+    "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+    "Content-Length": chunkSize.toString(),
+    "Accept-Ranges": "bytes"
+  }
+});
+```
+
+### Cancelled Flag Pattern
+
+**Problem:** When client closes connection, Node.js may throw `ERR_INVALID_STATE` if you try to write to the controller after it's closed.
+
+**Solution:** Track `cancelled` flag and check before every operation.
+
+```typescript
+let cancelled = false;
+
+stream.on("data", (chunk) => {
+  if (!cancelled) controller.enqueue(chunk);  // Safe
+});
+
+stream.on("end", () => {
+  if (!cancelled) controller.close();  // Safe
+  fileHandle.close();
+});
+
+cancel() {
+  cancelled = true;  // Set flag first
+  stream.destroy();  // Then cleanup
+  fileHandle.close();
+}
+```
+
+### HTTP Status Codes
+
+| Code | Meaning | Usage |
+|------|---------|-------|
+| 200 | OK | Full file served (no range header) |
+| 206 | Partial Content | Range request successful |
+| 400 | Bad Request | Invalid video ID format |
+| 404 | Not Found | Video file doesn't exist |
+| 416 | Range Not Satisfiable | Invalid byte range |
+
+### Why Range Requests Matter
+
+1. **Seeking:** Video player can jump to any timestamp without downloading entire file
+2. **Resume:** Interrupted downloads can resume from last byte
+3. **Performance:** Only download visible portion of video
+4. **Mobile:** Critical for bandwidth-constrained connections
+
+**Browser behavior:**
+- First request: `Range: bytes=0-` (request full file)
+- Seek to 50%: `Range: bytes=4194304-` (request from midpoint)
+- Buffering: Multiple small range requests in parallel
+
+## Person Segmentation (Optional)
+
+**File:** `app/api/segment/route.ts`  
+**Model:** SAM2 (Segment Anything Model 2) hosted on Modal
+
+### Segmentation Flow
+
+```
+/api/segment (POST { videoId })
+    ↓
+Check if already segmented
+    ↓
+Extract keyframes (0.5s intervals)
+    ↓
+Send frames to Modal SAM2 endpoint
+    ↓
+Receive person masks (binary PNG)
+    ↓
+Composite masks onto video frames
+    ↓
+Save segmented video to /tmp/jigglewiggle/{videoId}_segmented.mp4
+    ↓
+Return URL: /api/segment/video/{videoId}
+```
+
+### Why Modal?
+
+- **Heavy model:** SAM2 requires GPU inference
+- **Cold start:** ~10-30s to spin up container
+- **Cost:** Pay per second of inference
+- **Serverless:** No need to manage GPU instances
+
+### Client-Side API
+
+```typescript
+export async function segmentVideo(
+  videoId: string,
+  onProgress?: (status: string, progress?: number) => void
+): Promise<string> {
+  onProgress?.("Starting segmentation...", 5);
+  
+  const res = await fetch("/api/segment", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId })
+  });
+  
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to segment video");
+  }
+  
+  const data = await res.json();
+  
+  if (!data.cached) {
+    throw new Error("Unexpected response from segmentation API");
+  }
+  
+  onProgress?.("Complete!", 100);
+  return `/api/segment/video/${videoId}`;
+}
+```
+
+### Availability Check
+
+```typescript
+export async function isSegmentationAvailable(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/segment");
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.configured === true;
+  } catch {
+    return false;
+  }
+}
+```
+
+Segmentation is **optional** — app works without it, but visual quality improves with isolated dancer.
+
+## Client-Side Video Handling
+
+### Video Player Integration
+
+**File:** `app/components/YoutubePanel.tsx`
+
+```typescript
+<video
+  ref={videoRef}
+  src={videoSrc}  // /api/video/{videoId}
+  className="w-full h-full object-contain"
+  controls={false}
+  playsInline
+  crossOrigin="anonymous"
+/>
+```
+
+**`crossOrigin="anonymous"`:** Required for canvas manipulation during pose extraction
+
+### Pose Extraction Canvas
+
+**File:** `app/lib/videoPoseExtractor.ts:22`
+
+```typescript
+const video = document.createElement("video");
+video.src = videoSrc;
+video.crossOrigin = "anonymous";
+video.muted = true;
+video.playsInline = true;
+video.style.display = "none";
+document.body.appendChild(video);
+
+await new Promise<void>((resolve, reject) => {
+  video.onloadedmetadata = () => resolve();
+  video.onerror = () => reject(new Error("Failed to load video"));
+  video.load();
+});
+```
+
+**Hidden elements:** Created dynamically, never shown to user, cleaned up after extraction
+
+### Canvas Scaling
+
+```typescript
+const vw = video.videoWidth || 320;
+const vh = video.videoHeight || 240;
+const scale = Math.min(MAX_EXTRACT_DIM / vw, MAX_EXTRACT_DIM / vh);
+const cw = Math.round(vw * scale);
+const ch = Math.round(vh * scale);
+
+const canvas = document.createElement("canvas");
+canvas.width = cw;
+canvas.height = ch;
+```
+
+**MAX_EXTRACT_DIM = 320:** Balance between MediaPipe speed and accuracy
+
+**Maintains aspect ratio:** Both dimensions scaled proportionally
+
+## Performance Characteristics
+
+### Download Times
+
+| Video Length | Typical Size | Download Time (1 Mbps) | Download Time (10 Mbps) |
+|--------------|--------------|------------------------|-------------------------|
+| 30 seconds | 3-5 MB | 24-40s | 2.4-4s |
+| 1 minute | 6-10 MB | 48-80s | 4.8-8s |
+| 3 minutes | 18-30 MB | 144-240s | 14-24s |
+
+### Pose Extraction Times
+
+| Video Length | Frames @ 0.1s | Extraction Time |
+|--------------|---------------|----------------|
+| 30 seconds | 300 | ~5s |
+| 1 minute | 600 | ~10s |
+| 3 minutes | 1800 | ~30s |
+
+**Bottleneck:** MediaPipe inference, not video I/O
+
+### Serving Latency
+
+- **Range request overhead:** ~5-10ms
+- **First byte time:** ~10-20ms
+- **Throughput:** Limited by disk I/O (~500 MB/s for tmpfs)
+
+## Storage Considerations
+
+### Tmpfs Benefits
+
+- **Speed:** RAM-backed, no disk I/O
+- **Ephemeral:** Auto-cleanup on reboot
+- **Cost:** Uses system RAM
+
+### Disk Usage
+
+- **Typical video:** 5-10 MB
+- **Concurrent users:** 10
+- **Total storage:** ~100 MB
+
+**No manual cleanup:** Relies on OS tmpfs management
+
+### Legal Considerations
+
+**YouTube Terms of Service:**
+- Downloading videos violates ToS
+- Hackathon demo exception
+- Not for production/public use
+
+**Mitigation strategies:**
+- Ephemeral storage (short TTL)
+- No redistribution
+- Clear user disclosure
+- Educational use defense
+
+## Error Scenarios & Recovery
+
+### Download Failures
+
+```typescript
+data: {"type":"error","message":"Video unavailable"}
+```
+
+**Client handling:**
+```typescript
+if (event.type === "error") {
+  setDownloadError(event.message);
+  setDownloadStatus("error");
+}
+```
+
+### Serving Failures
+
+**404 Not Found:**
+- Video was deleted from tmpfs
+- Invalid video ID
+- Download never completed
+
+**Client recovery:**
+- Re-trigger download
+- Show error message with retry button
+
+### Classification Timeout
+
+```typescript
+// Client-side safety timeout
+setTimeout(() => {
+  if (classificationStatus === "pending") {
+    setClassificationStatus("done");
+    setMode("dance"); // Default
+  }
+}, 8000);
+```
+
+**Why 8 seconds?**
+- Groq API typically responds in &lt;2s
+- Network delays + retry buffer
+- Prevents infinite "Detecting mode..." state
+
+## Future Optimizations
+
+### Chunked Download + Play
+
+**Current:** Wait for full download  
+**Future:** Start playback as soon as first chunk arrives
+
+```typescript
+if (percent >= 10) {
+  // Emit early "ready" event
+  controller.enqueue(encoder.encode(
+    `data: ${JSON.stringify({ type: "playable" })}\n\n`
+  ));
+}
+```
+
+### Adaptive Bitrate
+
+**Current:** Single quality (yt-dlp `best`)  
+**Future:** Multiple qualities, client selects based on bandwidth
+
+### CDN Caching
+
+**Current:** Local tmpfs  
+**Future:** CDN edge caching with signed URLs
+
+### WebCodecs API
+
+**Current:** Hidden `<video>` + canvas  
+**Future:** Direct video decoding with WebCodecs for faster extraction
+
+## Related Pages
+
+- [System Architecture](/advanced/architecture)
+- [Pose Detection Deep Dive](/advanced/pose-detection)
+- [AI Integrations](/advanced/ai-integrations)

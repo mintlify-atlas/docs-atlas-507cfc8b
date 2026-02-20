@@ -1,0 +1,350 @@
+---
+title: "Scoring Library"
+description: "Choreography-agnostic pose scoring and feedback generation"
+---
+
+The `scoring.ts` library provides real-time pose quality scoring based on movement energy, form heuristics, and body mechanics. It's choreography-agnostic, meaning it evaluates general dance qualities rather than matching specific moves.
+
+<Note>
+This is a shared module used by both the YouTube app and the Zoom app. It's re-exported from `app/shared/scoring.ts`.
+</Note>
+
+## Types
+
+### ScoreFrame
+
+```typescript
+type ScoreFrame = {
+  ts: number;        // Timestamp (Date.now())
+  score: number;     // Overall score (0-100)
+  issues: string[];  // Human-readable issues
+};
+```
+
+A single frame's score snapshot. Issues include feedback like "Arms too low", "Not moving enough", etc.
+
+### PoseSummary
+
+```typescript
+type PoseSummary = {
+  score: number;              // Overall score (0-100)
+  confidence: number;         // Average landmark visibility
+  body: {
+    armHeight: number;        // Wrist Y - shoulder Y
+    armSymmetry: number;      // |left wrist Y - right wrist Y|
+    motionEnergy: number;     // Average keypoint displacement
+    torsoLean: number;        // Hip X - shoulder X (lateral lean)
+    kneeBend: number;         // Knee Y - hip Y (crouch depth)
+  };
+  issues: string[];           // Current frame issues
+  trend: "improving" | "declining" | "steady";
+  sessionSeconds: number;     // Time since first pose detected
+  reference?: {               // Optional: from pose comparison
+    matchScore: number;
+    limbScores: Record<string, number>;
+    worstLimb: string;
+    refPoseLabel: string;
+  };
+};
+```
+
+Compact JSON payload designed for LLM consumption. The coach API receives this to generate personalized feedback.
+
+## Functions
+
+### resetScoring
+
+```typescript
+function resetScoring(): void
+```
+
+Resets internal state (history, score history, session timer). Call when starting a new session or switching videos.
+
+**Usage:**
+```typescript
+import { resetScoring } from "@/lib/scoring";
+
+// Reset when user loads a new video
+resetScoring();
+```
+
+### computeScore
+
+```typescript
+function computeScore(
+  landmarks: NormalizedLandmark[] | null
+): ScoreFrame
+```
+
+Computes a 0-100 score based on pose quality heuristics.
+
+**Parameters:**
+- `landmarks`: Array of 33 pose landmarks (or null if no pose detected)
+
+**Returns:**
+- `ScoreFrame` with score, timestamp, and issues
+
+**Scoring algorithm:**
+
+1. **Base score**: 70 points
+2. **Visibility check** (-15 pts): Penalize if average visibility < 0.5
+3. **Arm height** (-10 pts): Penalize if wrists significantly below shoulders
+4. **Arm symmetry** (-8 pts): Penalize if left/right wrists differ by > 0.18
+5. **Motion energy** (+10/-8/-12 pts):
+   - Bonus if moderate movement (0.008 < displacement < 0.12)
+   - Penalty for "Not moving enough" or "Moving too chaotically"
+
+**Internal state:**
+- Maintains rolling history of last 15 pose frames
+- Maintains rolling history of last 30 scores
+- Resets history if pose is lost
+
+**Usage:**
+```typescript
+import { computeScore } from "@/lib/scoring";
+
+pose.onResults((results) => {
+  const frame = computeScore(results.poseLandmarks || null);
+  console.log(`Score: ${frame.score}`);
+  if (frame.issues.length > 0) {
+    console.log("Issues:", frame.issues.join(", "));
+  }
+});
+```
+
+**Example output:**
+```typescript
+{
+  ts: 1708473821234,
+  score: 82,
+  issues: ["Arms uneven"]
+}
+```
+
+### buildPoseSummary
+
+```typescript
+function buildPoseSummary(
+  landmarks: NormalizedLandmark[] | null,
+  frame: ScoreFrame
+): PoseSummary
+```
+
+Builds a detailed pose summary for the AI coach.
+
+**Parameters:**
+- `landmarks`: Current pose landmarks
+- `frame`: Output from `computeScore()`
+
+**Returns:**
+- `PoseSummary` with body metrics, trend, and session metadata
+
+**Body metrics:**
+
+```typescript
+// All values rounded to 3 decimal places
+armHeight = (avgWristY - avgShoulderY)
+armSymmetry = |leftWristY - rightWristY|
+motionEnergy = avgDisplacementOver3Frames
+torsoLean = (hipCenterX - shoulderCenterX)
+kneeBend = ((leftKneeY - leftHipY) + (rightKneeY - rightHipY)) / 2
+```
+
+**Trend calculation:**
+- `"improving"`: Recent 5 frames avg > older 5 frames avg by +5 pts
+- `"declining"`: Recent 5 frames avg < older 5 frames avg by -5 pts
+- `"steady"`: Otherwise (or if < 10 frames)
+
+**Usage:**
+```typescript
+import { computeScore, buildPoseSummary } from "@/lib/scoring";
+
+const frame = computeScore(landmarks);
+const summary = buildPoseSummary(landmarks, frame);
+
+// Send to coach API
+fetch("/api/coach", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ summary })
+});
+```
+
+**Example output:**
+```typescript
+{
+  score: 82,
+  confidence: 0.856,
+  body: {
+    armHeight: 0.124,
+    armSymmetry: 0.032,
+    motionEnergy: 0.045,
+    torsoLean: -0.008,
+    kneeBend: 0.156
+  },
+  issues: ["Arms uneven"],
+  trend: "improving",
+  sessionSeconds: 47,
+  reference: {
+    matchScore: 78,
+    limbScores: { rightArm: 85, leftArm: 72, rightLeg: 80, leftLeg: 76, torso: 82 },
+    worstLimb: "leftArm",
+    refPoseLabel: "Arms up"
+  }
+}
+```
+
+## Scoring Heuristics
+
+### Movement Energy
+
+**Formula:**
+```typescript
+// Compare current frame to frame from 3 frames ago
+totalDisp = Σ sqrt((currX - prevX)² + (currY - prevY)²)
+avgDisp = totalDisp / landmarkCount
+```
+
+**Thresholds:**
+- < 0.008: "Not moving enough" (-12 pts)
+- 0.008 - 0.12: Ideal range (+10 pts)
+- > 0.12: "Moving too chaotically" (-8 pts)
+
+### Arm Height
+
+**Formula:**
+```typescript
+avgWristY = (leftWristY + rightWristY) / 2
+avgShoulderY = (leftShoulderY + rightShoulderY) / 2
+
+if (avgWristY > avgShoulderY + 0.15) {
+  // "Arms too low" (-10 pts)
+}
+```
+
+### Arm Symmetry
+
+**Formula:**
+```typescript
+armDiff = |leftWristY - rightWristY|
+
+if (armDiff > 0.18) {
+  // "Arms uneven" (-8 pts)
+}
+```
+
+### Pose Confidence
+
+**Formula:**
+```typescript
+avgVisibility = Σ(landmark.visibility) / landmarkCount
+
+if (avgVisibility < 0.5) {
+  // "Low pose confidence" (-15 pts)
+}
+```
+
+## Integration Example
+
+```typescript
+import { computeScore, buildPoseSummary, resetScoring } from "@/lib/scoring";
+import { loadPose } from "@/lib/pose";
+import { useState, useEffect } from "react";
+
+export function ScoringDemo() {
+  const [score, setScore] = useState(0);
+  const [issues, setIssues] = useState<string[]>([]);
+
+  useEffect(() => {
+    resetScoring();
+
+    async function init() {
+      const pose = await loadPose();
+
+      pose.onResults((results: any) => {
+        const frame = computeScore(results.poseLandmarks || null);
+        setScore(frame.score);
+        setIssues(frame.issues);
+
+        // Build summary for coach (throttle to every 3 seconds)
+        if (frame.score > 0) {
+          const summary = buildPoseSummary(results.poseLandmarks, frame);
+          // sendToCoach(summary);
+        }
+      });
+
+      // ... set up video processing
+    }
+
+    init();
+  }, []);
+
+  return (
+    <div>
+      <h2>Score: {score}/100</h2>
+      {issues.length > 0 && (
+        <ul>
+          {issues.map((issue, i) => (
+            <li key={i}>{issue}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+```
+
+## State Management
+
+The scoring module maintains internal state:
+
+```typescript
+// Pose history for motion energy calculation
+const HISTORY_SIZE = 15;
+let history: NormalizedLandmark[][] = [];
+
+// Score history for trend analysis
+let scoreHistory: number[] = []; // Max 30 frames
+
+// Session timer
+let sessionStart = 0;
+```
+
+**Important:** This state is module-level, so:
+- Call `resetScoring()` when switching contexts
+- Don't use multiple scoring instances simultaneously
+- State persists across React re-renders
+
+## Design Philosophy
+
+**Choreography-agnostic**: Unlike reference-based comparison, this scoring evaluates general dance qualities:
+
+- ✅ Good: High energy, symmetric movements, confident posture
+- ❌ Bad: Static poses, asymmetric arms, poor visibility
+
+This allows scoring to work with any dance style without pre-recorded reference videos.
+
+**Complementary systems**:
+- Use `scoring.ts` for general feedback: "Move more!", "Even out your arms"
+- Use `poseComparison.ts` for specific feedback: "Your left arm is too low for this move"
+
+## Coach Integration
+
+The `PoseSummary` format is optimized for LLM consumption:
+
+```typescript
+// Compact, structured data
+{
+  score: 82,                    // High-level metric
+  body: { ... },                // Numerical features
+  issues: ["Arms uneven"],      // Specific problems
+  trend: "improving",           // Context over time
+  sessionSeconds: 47            // Session context
+}
+```
+
+The coach API uses this to generate personalized feedback:
+
+> "Nice work! Your energy is great at 0.045, but your left arm is lagging behind your right by 3.2cm. Try to keep them even as you move. You've improved +8 points in the last 15 seconds - keep it up!"
+
+See `/api/coach/route.ts` for the OpenAI integration.

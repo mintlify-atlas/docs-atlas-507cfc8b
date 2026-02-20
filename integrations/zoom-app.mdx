@@ -1,0 +1,292 @@
+---
+title: Zoom App Integration
+description: Set up Jiggle Wiggle as a Zoom App for real-time dance coaching during video meetings
+---
+
+The Jiggle Wiggle Zoom App brings AI-powered dance coaching directly into Zoom meetings. It runs as a side panel in Zoom, showing your webcam feed with skeleton pose overlay, real-time scoring, and LLM-powered coaching feedback.
+
+## How It Works
+
+The Zoom integration offers two modes:
+
+1. **Zoom SDK Mode** - Embeds a live Zoom meeting using the Zoom Video SDK
+2. **Screen Capture Mode** - Captures your Zoom window using `getDisplayMedia()` (no credentials needed)
+
+Both modes provide:
+- Real-time pose detection on both the remote dancer and your webcam
+- Geometric pose comparison with per-limb scoring
+- Live coaching feedback with text-to-speech
+- Aspect-ratio-corrected skeleton overlays
+
+## Prerequisites
+
+- A Zoom account (Free or Pro)
+- Node.js 18+ and the Jiggle Wiggle dev server running
+- For SDK mode: Zoom Video SDK credentials
+- For testing: ngrok or cloudflared for HTTPS tunneling
+
+## Setup for Zoom App (Official)
+
+<Steps>
+  <Step title="Create a Zoom App">
+    1. Go to [Zoom Marketplace](https://marketplace.zoom.us/)
+    2. Click **Develop** → **Build App**
+    3. Choose **Zoom Apps** as the app type
+    4. Fill in basic information:
+       - **App Name:** Jiggle Wiggle
+       - **Short Description:** Real-time AI dance coaching inside Zoom meetings
+       - **Developer Name:** Your name or organization
+  </Step>
+
+  <Step title="Configure app URLs">
+    You need to provide HTTPS URLs. For local development, use ngrok or cloudflared:
+    
+    ```bash
+    # Terminal 1: Start the dev server
+    npm run dev
+    
+    # Terminal 2: Start ngrok tunnel
+    ngrok http 3000
+    ```
+    
+    Copy the ngrok HTTPS URL (e.g., `https://abc123.ngrok.io`) and configure these fields in the Zoom App settings:
+    
+    | Field | Value |
+    |-------|-------|
+    | **Home URL** | `https://your-tunnel.ngrok.io/zoom` |
+    | **Redirect URL** | `https://your-tunnel.ngrok.io/zoom` |
+    | **Allow List** | `your-tunnel.ngrok.io` |
+  </Step>
+
+  <Step title="Set scopes and capabilities">
+    The Zoom app uses standard browser APIs and the Zoom Apps SDK for context:
+    
+    **Required SDK Capabilities:**
+    - `getMeetingContext` - Access meeting metadata
+    - `getUserContext` - Access user information
+    
+    **No special OAuth scopes required** - the app uses standard browser `getUserMedia()` for camera access
+  </Step>
+
+  <Step title="Configure environment variables">
+    Create or update `.env.local` in your project root:
+    
+    ```bash
+    # OpenAI API key (required for coaching)
+    OPENAI_API_KEY=sk-your-key-here
+    
+    # Zoom SDK credentials (for SDK mode)
+    NEXT_PUBLIC_ZOOM_SDK_KEY=your-sdk-key
+    ZOOM_SDK_SECRET=your-sdk-secret
+    ```
+    
+    Get Zoom SDK credentials from your app's **App Credentials** page in the Zoom Marketplace.
+  </Step>
+
+  <Step title="Test in Zoom client">
+    1. Open the Zoom desktop client
+    2. Start or join a meeting
+    3. Click **Apps** in the meeting toolbar
+    4. Find **Jiggle Wiggle** in your apps list
+    5. Click to open the app panel
+    6. Allow camera access when prompted
+    7. Start dancing!
+  </Step>
+</Steps>
+
+## Sample Configuration
+
+Here's a complete configuration reference for the Zoom Marketplace:
+
+```json
+{
+  "appName": "Jiggle Wiggle",
+  "shortDescription": "Real-time AI dance coaching inside Zoom meetings",
+  "appType": "Zoom Apps",
+  "homeUrl": "https://YOUR_TUNNEL_URL/zoom",
+  "redirectUrl": "https://YOUR_TUNNEL_URL/zoom",
+  "allowList": ["YOUR_TUNNEL_URL"],
+  "scopes": [],
+  "sdkCapabilities": [
+    "getMeetingContext",
+    "getUserContext"
+  ]
+}
+```
+
+Replace `YOUR_TUNNEL_URL` with your ngrok/cloudflared domain (without `https://`).
+
+## Using Screen Capture Mode (No SDK Required)
+
+If you don't want to set up Zoom SDK credentials, use Screen Capture mode:
+
+<Steps>
+  <Step title="Open the Zoom app page">
+    Navigate to `http://localhost:3000/zoom` in your browser
+  </Step>
+
+  <Step title="Select Screen Capture mode">
+    Click the **Capture Zoom Window** option
+  </Step>
+
+  <Step title="Share your Zoom window">
+    1. Click the screen capture panel
+    2. Browser will prompt to select a window/screen
+    3. Choose your Zoom meeting window
+    4. Grant permission
+  </Step>
+
+  <Step title="Position yourself">
+    - The left panel shows the captured Zoom window (reference dancer)
+    - The right panel shows your webcam (you)
+    - Dance along and watch the real-time comparison!
+  </Step>
+</Steps>
+
+## Architecture Overview
+
+The Zoom app (`/app/zoom/page.tsx`) reuses core modules from the main app:
+
+### Shared Modules
+
+- **`CameraPanel.tsx`** - Webcam feed with MediaPipe Pose skeleton overlay
+- **`ComparisonPanel.tsx`** - Real-time scoring display and coaching feedback
+- **`ScreenCapturePanel.tsx`** - Screen capture with pose detection
+- **`pose.ts`** - MediaPipe Pose loading and configuration
+- **`scoring.ts`** - Movement scoring and pose summary generation
+- **`coach.ts`** - LLM coaching client with conversation history
+- **`speech.ts`** - Text-to-speech using OpenAI TTS
+- **`poseComparison.ts`** - Geometric pose comparison with aspect ratio correction
+
+### Data Flow
+
+```
+Zoom Feed → MediaPipe Pose → Remote Landmarks
+Webcam → MediaPipe Pose → Self Landmarks
+                ↓
+         comparePosesDetailed()
+         (geometric per-limb matching)
+                ↓
+         Blended Score (80% geometric + 20% heuristic)
+                ↓
+         EMA Smoothing → Display Score
+                ↓
+         buildPoseSummary() → /api/coach → Coaching Text + Audio
+```
+
+### Scoring Algorithm
+
+The Zoom app uses a sophisticated blending approach:
+
+1. **Geometric Comparison** - Compares normalized joint positions between reference dancer and user
+2. **Per-Limb Scoring** - Breaks down accuracy by arms, legs, and torso
+3. **Heuristic Metrics** - Analyzes movement energy, form, symmetry
+4. **Blended Score** - `80% geometric match + 20% heuristic score`
+5. **EMA Smoothing** - Applies exponential moving average for stable display
+
+```typescript
+const geoScore = detailed.matchScore;
+const blended = Math.round(0.8 * geoScore + 0.2 * frame.score);
+const finalScore = Math.max(0, Math.min(100, blended));
+```
+
+## Standalone Testing
+
+You can test the Zoom app UI without joining a real meeting:
+
+```bash
+# Start dev server
+npm run dev
+
+# Open in browser
+open http://localhost:3000/zoom
+```
+
+The app detects it's not inside Zoom and falls back to standalone mode. Choose "Screen Capture" mode to test the full flow without Zoom SDK setup.
+
+## Production Deployment
+
+<Steps>
+  <Step title="Deploy to a production host">
+    Deploy your Next.js app to Vercel, Netlify, or your hosting provider:
+    
+    ```bash
+    npm run build
+    npm start
+    ```
+  </Step>
+
+  <Step title="Update Zoom App URLs">
+    In the Zoom Marketplace, update your app configuration:
+    - **Home URL:** `https://yourdomain.com/zoom`
+    - **Redirect URL:** `https://yourdomain.com/zoom`
+    - **Allow List:** `yourdomain.com`
+  </Step>
+
+  <Step title="Set production environment variables">
+    Configure your hosting platform with:
+    ```bash
+    OPENAI_API_KEY=sk-prod-key
+    NEXT_PUBLIC_ZOOM_SDK_KEY=prod-sdk-key
+    ZOOM_SDK_SECRET=prod-sdk-secret
+    ```
+  </Step>
+
+  <Step title="Submit for Zoom App review">
+    1. Complete all required fields in the Zoom Marketplace
+    2. Add screenshots and demo video
+    3. Submit for review (typically 3-5 business days)
+    4. Once approved, your app will be available to all Zoom users
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Camera permission denied
+- Ensure you're using HTTPS (required for `getUserMedia()`)
+- Check browser settings to allow camera access for your domain
+- Try refreshing the page and re-granting permission
+
+### Zoom SDK signature error
+- Verify `NEXT_PUBLIC_ZOOM_SDK_KEY` and `ZOOM_SDK_SECRET` are correct
+- Check that your meeting number is valid (no spaces)
+- Ensure the SDK credentials match your app in the Zoom Marketplace
+
+### Pose detection not working
+- MediaPipe Pose requires a modern browser (Chrome 90+, Firefox 88+, Safari 14+)
+- Check browser console for errors
+- Ensure adequate lighting for the camera
+- Verify the person is fully visible in frame
+
+### Screen capture shows black screen
+- Make sure you selected the correct window/screen
+- Some apps block screen capture - try a different window
+- Grant screen recording permission in system settings (macOS)
+
+### No coaching feedback
+- Verify `OPENAI_API_KEY` is set in environment variables
+- Check API rate limits and quota
+- View `/api/coach` logs for errors
+
+## Performance Tips
+
+- **Reduce video quality** - Lower resolution Zoom feeds improve pose detection speed
+- **Good lighting** - Helps MediaPipe detect poses more accurately
+- **Stable camera** - Mount your camera or use a tripod for best results
+- **Close other tabs** - Pose detection is CPU-intensive
+- **Use Chrome** - Best performance with MediaPipe WASM modules
+
+## Advanced Configuration
+
+Customize scoring parameters in `/app/zoom/page.tsx`:
+
+```typescript
+// Scoring smoothing (lower = smoother, higher = more responsive)
+const SCORE_EMA_ALPHA = 0.15;
+
+// Minimum score change to trigger UI update (reduces flicker)
+const SCORE_DEAD_ZONE = 2;
+
+// Blend ratio between geometric and heuristic scoring
+const blended = Math.round(0.8 * geoScore + 0.2 * frame.score);
+```

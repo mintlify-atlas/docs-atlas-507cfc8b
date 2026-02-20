@@ -1,0 +1,405 @@
+---
+title: "POST /api/generate"
+description: "AI-powered exercise video generation from text prompts"
+---
+
+Generates custom dance or workout videos from text descriptions using a three-phase pipeline: web research (Perplexity), synthesis (OpenAI), and video generation (Grok).
+
+## Endpoint
+
+```
+POST /api/generate
+```
+
+## Request Body
+
+<ParamField body="prompt" type="string" required>
+  Text description of desired dance move or exercise
+  
+  Minimum 3 characters
+  
+  Example: `"5 burpees with perfect form"`
+  
+  Example: `"hip hop dance move with arm waves"`
+</ParamField>
+
+## Response Format
+
+Returns a Server-Sent Events (SSE) stream with `Content-Type: text/event-stream`.
+
+### Event Types
+
+<ResponseField name="genId" type="object">
+  Generated video ID for playback
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"genId"`
+    </ResponseField>
+    <ResponseField name="id" type="string">
+      Generated video ID (format: `gen_{timestamp}`)
+      
+      Use with `/api/video/{id}` to play video
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="classified" type="object">
+  Automatic mode classification
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"classified"`
+    </ResponseField>
+    <ResponseField name="mode" type="string">
+      `"dance"` or `"gym"` based on prompt keywords
+    </ResponseField>
+    <ResponseField name="title" type="string">
+      The original prompt
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="progress" type="object">
+  Pipeline progress updates
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"progress"`
+    </ResponseField>
+    <ResponseField name="percent" type="number">
+      Completion percentage (0-100)
+    </ResponseField>
+    <ResponseField name="phase" type="string">
+      Current phase: `"researching"`, `"synthesizing"`, `"generating"`, `"downloading"`, or `"done"`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="synthesis" type="object">
+  Generated video description (after synthesis phase)
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"synthesis"`
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Detailed visual description sent to video generation model
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="done" type="object">
+  Generation complete
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"done"`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="error" type="object">
+  Generation error
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"error"`
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      Error description
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Generation Pipeline
+
+### Phase 1: Research (Perplexity Sonar)
+
+**Progress:** 5% → 30%
+
+Uses Perplexity's Sonar Pro model for web-grounded research:
+
+From app/api/generate/route.ts:61-84:
+
+```typescript
+const perplexity = new OpenAI({
+  apiKey: process.env.PERPLEXITY_API_KEY,
+  baseURL: "https://api.perplexity.ai",
+});
+
+const researchCompletion = await perplexity.chat.completions.create({
+  model: "sonar-pro",
+  messages: [
+    {
+      role: "system",
+      content: "You are a fitness research assistant. Provide detailed, actionable exercise information with specific movements, form cues, timing, and step-by-step instructions. Cite real sources.",
+    },
+    {
+      role: "user",
+      content: `Find detailed exercise routines, step-by-step instructions, and movement descriptions for: ${prompt}. Include specific exercises, form cues, muscle groups targeted, and timing for each movement.`,
+    },
+  ],
+});
+```
+
+Falls back gracefully if Perplexity fails.
+
+### Phase 2: Synthesis (OpenAI GPT-4o-mini)
+
+**Progress:** 40% → 50%
+
+Transforms research into a detailed video description:
+
+From app/api/generate/route.ts:93-116:
+
+```typescript
+const synthesisPrompt = `You are a fitness and movement expert. Based on the user's request and the research below, create a detailed visual description for a single 10-second video clip.
+
+USER REQUEST: "${prompt}"
+
+${researchData ? `RESEARCH FROM THE INTERNET:\n${researchData}` : "No external research available - use your expertise."}
+
+Create a vivid, detailed description of a single continuous video showing a person performing the exercise/movement. STRICT REQUIREMENTS:
+- STATIC CAMERA: The camera must be completely stationary and fixed in place. No panning, zooming, tracking, or camera movement of any kind. Use a locked-off front-facing medium shot.
+- PLAIN BACKGROUND: The setting must be a clean white studio or a plain white/light gray wall. No gym equipment, no windows, no decorations — just a minimal, distraction-free background.
+- Show the full body of the person from head to toe, centered in frame.
+- The person performs the movements with clear, deliberate form.
+
+Keep the description under 200 words. The video will be 15 seconds long. Be specific and visual — this will be used to generate a video.`;
+
+const completion = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [{ role: "user", content: synthesisPrompt }],
+  max_tokens: 300,
+  temperature: 0.7,
+});
+```
+
+Emits `synthesis` event with generated description.
+
+### Phase 3: Video Generation (Grok)
+
+**Progress:** 55% → 100%
+
+Generates video using Grok's video generation API:
+
+From app/api/generate/route.ts:124-140:
+
+```typescript
+const requestId = await generateVideo(videoDescription, {
+  duration: 10,
+  aspect_ratio: "4:3",
+  resolution: "480p",
+});
+
+// Poll for completion
+const videoUrl = await waitForVideo(requestId, () => {
+  emit({ type: "progress", percent: 70, phase: "generating" });
+});
+
+// Download to local storage
+await downloadVideo(videoUrl, outputPath);
+```
+
+Video saved to `/tmp/jigglewiggle/gen_{timestamp}.mp4`.
+
+## Prompt Classification
+
+From app/api/generate/route.ts:14-24:
+
+```typescript
+function classifyPrompt(prompt: string): "dance" | "gym" {
+  const lower = prompt.toLowerCase();
+  const danceKeywords = ["dance", "choreography", "choreo", "moves", "groove", "hip hop", "ballet", "salsa", "tango"];
+  const gymKeywords = ["workout", "exercise", "fitness", "muscle", "reps", "sets", "hiit", "core", "abs", "leg", "arm", "chest", "back", "squat", "push", "pull", "cardio", "yoga", "stretch", "warm up", "cool down"];
+
+  const danceScore = danceKeywords.filter((k) => lower.includes(k)).length;
+  const gymScore = gymKeywords.filter((k) => lower.includes(k)).length;
+
+  return danceScore > gymScore ? "dance" : "gym";
+}
+```
+
+## Example Request
+
+```typescript
+const response = await fetch('/api/generate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    prompt: '10 jumping jacks with proper form'
+  })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+let videoId = null;
+let buffer = '';
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  
+  buffer += decoder.decode(value, { stream: true });
+  const lines = buffer.split('\n\n');
+  buffer = lines.pop() || '';
+  
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const event = JSON.parse(line.slice(6));
+      
+      if (event.type === 'genId') {
+        videoId = event.id;
+        console.log('Video ID:', videoId);
+      } else if (event.type === 'progress') {
+        console.log(`${event.phase}: ${event.percent}%`);
+      } else if (event.type === 'synthesis') {
+        console.log('Description:', event.description);
+      } else if (event.type === 'done') {
+        console.log('Generation complete!');
+        // Play video: /api/video/{videoId}
+        const video = document.querySelector('video');
+        video.src = `/api/video/${videoId}`;
+      } else if (event.type === 'error') {
+        console.error('Error:', event.message);
+      }
+    }
+  }
+}
+```
+
+## Example SSE Stream
+
+```
+data: {"type":"genId","id":"gen_1708472400000"}
+
+data: {"type":"classified","mode":"gym","title":"10 jumping jacks with proper form"}
+
+data: {"type":"progress","percent":5,"phase":"researching"}
+
+data: {"type":"progress","percent":30,"phase":"researching"}
+
+data: {"type":"progress","percent":40,"phase":"synthesizing"}
+
+data: {"type":"progress","percent":50,"phase":"synthesizing"}
+
+data: {"type":"synthesis","description":"A person stands centered in a clean white studio, facing the camera in a static locked-off medium shot. They begin in a standing position with feet together and arms at sides. In one fluid motion, they jump and spread their feet shoulder-width apart while simultaneously raising both arms overhead in an arc until hands nearly touch. They then jump again, returning feet together and lowering arms back to sides. The movement is performed with deliberate, controlled form for 10 repetitions, maintaining upright posture throughout."}
+
+data: {"type":"progress","percent":55,"phase":"generating"}
+
+data: {"type":"progress","percent":70,"phase":"generating"}
+
+data: {"type":"progress","percent":85,"phase":"downloading"}
+
+data: {"type":"progress","percent":100,"phase":"done"}
+
+data: {"type":"done"}
+
+```
+
+## Error Responses
+
+### Prompt Too Short
+
+```json
+{
+  "error": "Prompt too short"
+}
+```
+
+Status: `400 Bad Request`
+
+Prompt must be at least 3 characters.
+
+### Generation Failure
+
+Emitted as SSE event:
+
+```json
+{
+  "type": "error",
+  "message": "Grok video generation failed: Invalid request"
+}
+```
+
+## Environment Variables
+
+- `PERPLEXITY_API_KEY` — Required for research phase
+- `OPENAI_API_KEY` — Required for synthesis phase
+- `GROK_API_KEY` — Required for video generation (via `app/lib/grok.ts`)
+
+## Generated Video IDs
+
+Format: `gen_{timestamp}`
+
+Example: `gen_1708472400000`
+
+Play with: `<video src="/api/video/gen_1708472400000"></video>`
+
+## Performance Notes
+
+- **Total time:** 30-90 seconds depending on research depth and generation
+- **Research:** 2-8 seconds (web search + LLM)
+- **Synthesis:** 1-3 seconds (GPT-4o-mini)
+- **Generation:** 20-60 seconds (Grok video generation + download)
+- Videos are 10-15 seconds long at 480p resolution in 4:3 aspect ratio
+
+## Integration Example
+
+```typescript
+function GenerateVideoButton({ prompt }: { prompt: string }) {
+  const [progress, setProgress] = useState(0);
+  const [phase, setPhase] = useState('');
+  const [videoId, setVideoId] = useState<string | null>(null);
+  
+  async function generate() {
+    const response = await fetch('/api/generate', {
+      method: 'POST',
+      body: JSON.stringify({ prompt })
+    });
+    
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const event = JSON.parse(line.slice(6));
+          
+          if (event.type === 'genId') {
+            setVideoId(event.id);
+          } else if (event.type === 'progress') {
+            setProgress(event.percent);
+            setPhase(event.phase);
+          }
+        }
+      }
+    }
+  }
+  
+  return (
+    <div>
+      <button onClick={generate}>Generate Video</button>
+      {progress > 0 && (
+        <div>
+          <progress value={progress} max={100} />
+          <span>{phase}: {progress}%</span>
+        </div>
+      )}
+      {videoId && (
+        <video src={`/api/video/${videoId}`} controls />
+      )}
+    </div>
+  );
+}
+```

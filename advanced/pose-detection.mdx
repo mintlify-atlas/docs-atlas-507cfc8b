@@ -1,0 +1,635 @@
+---
+title: Pose Detection Deep Dive
+description: In-depth technical guide to MediaPipe Pose implementation, pose comparison algorithms, and real-time scoring mechanics
+---
+
+## Overview
+
+Jiggle Wiggle uses MediaPipe Pose for both reference video analysis and real-time webcam tracking. This page covers the complete pose detection pipeline, from CDN loading to normalized comparison algorithms.
+
+## MediaPipe Pose Architecture
+
+### CDN Loading Strategy
+
+**File:** `app/lib/pose.ts`
+
+MediaPipe Pose is loaded dynamically from CDN rather than bundled to avoid bloating the Next.js bundle with large WASM files (~2MB).
+
+```typescript
+export async function loadPose(): Promise<unknown> {
+  await loadScript(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"
+  );
+  
+  const pose = new window.Pose({
+    locateFile: (file) => 
+      `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+  });
+  
+  pose.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+  
+  return pose;
+}
+```
+
+**Retry Logic:**
+- 3 attempts with exponential backoff (1s, 2s, 3s)
+- Remove failed script tag before retry
+- 100ms delay after load for global initialization
+
+**Model Configuration:**
+- **Model Complexity: 1** — Balanced accuracy vs performance
+- **Smooth Landmarks: true** — Temporal smoothing reduces jitter
+- **Segmentation: false** — Disabled for performance (separate SAM2 pipeline)
+- **Min Confidence: 0.5** — Threshold for detection and tracking
+
+### Landmark Schema
+
+```typescript
+type NormalizedLandmark = {
+  x: number;        // 0-1 normalized to image width
+  y: number;        // 0-1 normalized to image height
+  z: number;        // Depth relative to hips (negative = closer)
+  visibility?: number; // 0-1 confidence score
+};
+
+type PoseResults = {
+  poseLandmarks?: NormalizedLandmark[]; // 33 landmarks
+};
+```
+
+**Key Landmark Indices:**
+```typescript
+0  = nose
+11 = left shoulder
+12 = right shoulder
+13 = left elbow
+14 = right elbow
+15 = left wrist
+16 = right wrist
+23 = left hip
+24 = right hip
+25 = left knee
+26 = right knee
+27 = left ankle
+28 = right ankle
+29 = left heel
+30 = right heel
+31 = left foot index
+32 = right foot index
+33 = synthetic neck (midpoint of shoulders 11 & 12)
+```
+
+### Skeleton Visualization
+
+**File:** `app/lib/pose.ts:56`
+
+```typescript
+export function drawSkeleton(
+  ctx: CanvasRenderingContext2D,
+  landmarks: NormalizedLandmark[],
+  width: number,
+  height: number,
+  style?: SkeletonStyle
+)
+```
+
+**Features:**
+- **Mirroring:** Optional horizontal flip for webcam (default: true)
+- **Synthetic neck landmark:** Computed as midpoint of shoulders for cleaner torso visualization
+- **Visibility filtering:** Connections/points with visibility < 0.3 are hidden
+- **Per-connection coloring:** Supports color map for limb-specific feedback (green/yellow/red)
+- **Parameterized style:** Stroke color, fill color, line width, point radius, opacity
+
+**Connections Array:**
+```typescript
+const POSE_CONNECTIONS: [number, number][] = [
+  [0, 33],   // nose → neck
+  [33, 11],  // neck → left shoulder
+  [33, 12],  // neck → right shoulder
+  [11, 13],  // left shoulder → elbow
+  [13, 15],  // left elbow → wrist
+  // ... (19 connections total)
+];
+```
+
+## Reference Video Pose Extraction
+
+**File:** `app/lib/videoPoseExtractor.ts`
+
+### Extraction Pipeline
+
+```
+Downloaded MP4
+    ↓
+Create hidden <video> + <canvas>
+    ↓
+Load video metadata (duration, dimensions)
+    ↓
+Scale canvas to 320px max dimension
+  • Preserves aspect ratio
+  • Balances MediaPipe speed vs accuracy
+    ↓
+Seek through frames at 0.1s intervals (10fps)
+    ↓
+For each frame:
+  1. Seek video to timestamp
+  2. Draw video frame to canvas
+  3. Run MediaPipe on canvas
+  4. Store { time, landmarks }
+    ↓
+PoseTimeline: Array<{ time, landmarks }>
+    ↓
+Cleanup (remove hidden elements)
+```
+
+**Code:**
+```typescript
+export async function extractPoses(
+  videoSrc: string,
+  onProgress: (percent: number) => void
+): Promise<PoseTimeline> {
+  const { video, canvas, ctx, pose, duration, cleanup } = 
+    await prepareExtractionElements(videoSrc);
+  
+  const timeline: PoseTimeline = [];
+  const step = 0.1; // 10fps
+  
+  for (let t = 0; t < duration; t += step) {
+    video.currentTime = t;
+    await new Promise<void>(resolve => {
+      video.onseeked = () => resolve();
+    });
+    
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    const landmarks = await new Promise<NormalizedLandmark[]>(resolve => {
+      resolveFrame = resolve;
+      pose.send({ image: canvas });
+    });
+    
+    timeline.push({ time: t, landmarks });
+    onProgress((t / duration) * 100);
+  }
+  
+  cleanup();
+  return timeline;
+}
+```
+
+### Smart Frame Selection for MoveQueue
+
+**Function:** `extractStripPoses()`
+
+Instead of uniform sampling, Jiggle Wiggle selects the most "interesting" poses for the MoveQueue strip.
+
+**Interest Score Calculation:**
+```typescript
+function calculateInterestScore(
+  frame: StripPoseFrame,
+  prevFrame: StripPoseFrame | null,
+  nextFrame: StripPoseFrame | null
+): number {
+  let score = 0;
+  
+  // 1. Motion energy (displacement from previous frame)
+  if (prevFrame) {
+    let totalDisp = 0;
+    for (let i = 0; i < landmarks.length; i++) {
+      const dx = landmarks[i].x - prevFrame.landmarks[i].x;
+      const dy = landmarks[i].y - prevFrame.landmarks[i].y;
+      totalDisp += Math.sqrt(dx * dx + dy * dy);
+    }
+    score += (totalDisp / landmarks.length) * 100;
+  }
+  
+  // 2. Pose extremity
+  const armHeight = Math.abs(avgWristY - avgShoulderY);
+  score += armHeight * 20;
+  
+  const armSpread = Math.abs(leftWrist.x - rightWrist.x);
+  score += armSpread * 15;
+  
+  const kneeBend = Math.abs(avgKneeY - avgHipY);
+  score += kneeBend * 25;
+  
+  // 3. Local peak bonus
+  if (prevFrame && nextFrame) {
+    score += 5;
+  }
+  
+  return score;
+}
+```
+
+**Greedy Selection Algorithm:**
+1. Sample densely at 0.5s intervals (~120 frames for 60s video)
+2. Score all frames
+3. Sort by score descending
+4. Greedily select top frames with minimum temporal spacing
+5. Sort selected frames by time
+6. Return ~20 frames for MoveQueue
+
+**Minimum spacing:**
+```typescript
+const minSpacing = (totalDuration) / (targetCount * 1.5);
+```
+
+This ensures keyframes are spread throughout the video, not clustered.
+
+## Pose Normalization & Comparison
+
+**File:** `app/lib/poseComparison.ts`
+
+### The Normalization Challenge
+
+Comparing poses from different sources requires normalization because:
+- **Different aspect ratios:** YouTube video (16:9) vs webcam (4:3)
+- **Different distances:** User may be closer/farther from camera
+- **Different framing:** Reference dancer may be offset in frame
+
+### Normalization Algorithm
+
+```typescript
+export function normalizePose(
+  landmarks: NormalizedLandmark[],
+  aspectRatio: number = 1  // width/height
+): NormalizedLandmark[] {
+  // Step 1: Correct x-coordinates to square space
+  // MediaPipe (x,y) are in [0,1] relative to image dims
+  // If aspect ratio is 16:9 (≈1.78), x spans wider than y
+  const corrected = landmarks.map(lm => ({
+    ...lm,
+    x: lm.x * aspectRatio
+  }));
+  
+  // Step 2: Find hip midpoint
+  const lHip = corrected[23];
+  const rHip = corrected[24];
+  const hipMidX = (lHip.x + rHip.x) / 2;
+  const hipMidY = (lHip.y + rHip.y) / 2;
+  
+  // Step 3: Find shoulder midpoint
+  const lShoulder = corrected[11];
+  const rShoulder = corrected[12];
+  const shoulderMidX = (lShoulder.x + rShoulder.x) / 2;
+  const shoulderMidY = (lShoulder.y + rShoulder.y) / 2;
+  
+  // Step 4: Calculate torso length
+  const torsoLen = Math.sqrt(
+    (shoulderMidX - hipMidX) ** 2 + 
+    (shoulderMidY - hipMidY) ** 2
+  );
+  
+  // Step 5: Scale to target torso length (0.25 in normalized space)
+  const TARGET_TORSO = 0.25;
+  const scale = torsoLen > 0.01 ? TARGET_TORSO / torsoLen : 1;
+  
+  // Step 6: Center hip at (0.5, 0.6)
+  const cx = 0.5;
+  const cy = 0.6;
+  
+  return corrected.map(lm => ({
+    x: (lm.x - hipMidX) * scale + cx,
+    y: (lm.y - hipMidY) * scale + cy,
+    z: lm.z,
+    visibility: lm.visibility
+  }));
+}
+```
+
+**Key Insight:** Aspect ratio correction happens **before** centering and scaling. This ensures poses from 16:9 and 4:3 sources have comparable geometry.
+
+### Pose Comparison Algorithm
+
+**Strategy: Reference-Centric Comparison**
+
+Only compare landmarks that are visible in the reference pose. If a landmark exists in the user's pose but not in the reference, it's ignored. If a landmark exists in the reference but not in the user's pose, it's penalized.
+
+```typescript
+export function comparePoses(
+  ref: NormalizedLandmark[],
+  live: NormalizedLandmark[]
+): PoseComparisonResult {
+  const limbDistances: Record<string, number[]> = {};
+  
+  // Define limb groups
+  const LIMB_JOINTS: Record<string, number[]> = {
+    rightArm: [12, 14, 16],
+    leftArm: [11, 13, 15],
+    rightLeg: [24, 26, 28],
+    leftLeg: [23, 25, 27],
+    torso: [11, 12, 23, 24]
+  };
+  
+  // Compute per-joint distances grouped by limb
+  for (const [limb, joints] of Object.entries(LIMB_JOINTS)) {
+    for (const idx of joints) {
+      const r = ref[idx];
+      const l = live[idx];
+      
+      // Skip if reference landmark doesn't exist
+      if (!r || (r.visibility ?? 0) < 0.3) continue;
+      
+      // Penalize if user is missing a landmark that reference has
+      if (!l || (l.visibility ?? 0) < 0.3) {
+        limbDistances[limb].push(THRESH_OK * 2); // Max penalty
+      } else {
+        // Both exist - measure distance
+        limbDistances[limb].push(dist(r, l));
+      }
+    }
+  }
+  
+  // Average distance per limb → color
+  const THRESH_GOOD = 0.06;
+  const THRESH_OK = 0.12;
+  
+  const limbColors: Record<string, string> = {};
+  for (const [limb, distances] of Object.entries(limbDistances)) {
+    const avg = distances.reduce((s, d) => s + d, 0) / distances.length;
+    limbColors[limb] = 
+      avg < THRESH_GOOD ? "#22c55e" :  // Green
+      avg < THRESH_OK ? "#eab308" :    // Yellow
+      "#ef4444";                       // Red
+  }
+  
+  // Map connections to their limb color
+  const connectionColors = new Map<string, string>();
+  for (const [a, b] of POSE_CONNECTIONS) {
+    const limb = connectionToLimb(a, b);
+    if (limb && limbColors[limb]) {
+      connectionColors.set(`${a}-${b}`, limbColors[limb]);
+    }
+  }
+  
+  return { overallScore, connectionColors };
+}
+```
+
+**Thresholds:**
+- **THRESH_GOOD (0.06):** Within 6% of normalized frame → Green
+- **THRESH_OK (0.12):** Within 12% of normalized frame → Yellow
+- **Above THRESH_OK:** Red
+
+### Detailed Comparison with Per-Limb Scores
+
+```typescript
+export function comparePosesDetailed(
+  refLandmarks: NormalizedLandmark[],
+  liveLandmarks: NormalizedLandmark[],
+  refAspectRatio: number = 1,
+  liveAspectRatio: number = 1
+): DetailedComparison | null {
+  const refNorm = normalizePose(refLandmarks, refAspectRatio);
+  const liveNorm = normalizePose(liveLandmarks, liveAspectRatio);
+  
+  const limbScores: Record<string, number> = {};
+  
+  for (const [limb, joints] of Object.entries(LIMB_JOINTS)) {
+    const distances: number[] = [];
+    
+    for (const idx of joints) {
+      const r = refNorm[idx];
+      const l = liveNorm[idx];
+      
+      if (!r || (r.visibility ?? 0) < 0.3) continue;
+      
+      if (!l || (l.visibility ?? 0) < 0.3) {
+        distances.push(THRESH_OK * 2); // Penalty
+      } else {
+        distances.push(dist(r, l));
+      }
+    }
+    
+    const avg = distances.reduce((s, d) => s + d, 0) / distances.length;
+    limbScores[limb] = Math.round(100 * (1 - avg / (THRESH_OK * 2)));
+  }
+  
+  const matchScore = Math.round(
+    Object.values(limbScores).reduce((s, v) => s + v, 0) / 5
+  );
+  
+  const worstLimb = Object.entries(limbScores)
+    .reduce((worst, curr) => curr[1] < worst[1] ? curr : worst)[0];
+  
+  const refPoseLabel = classifyPose(refNorm);
+  
+  return { matchScore, limbScores, worstLimb, refPoseLabel };
+}
+```
+
+**Output Example:**
+```json
+{
+  "matchScore": 76,
+  "limbScores": {
+    "rightArm": 82,
+    "leftArm": 79,
+    "rightLeg": 71,
+    "leftLeg": 68,
+    "torso": 85
+  },
+  "worstLimb": "leftLeg",
+  "refPoseLabel": "Arms up"
+}
+```
+
+### Pose Classification
+
+Simple rule-based classifier for human-readable pose labels:
+
+```typescript
+export function classifyPose(landmarks: NormalizedLandmark[]): string {
+  const armsUp = lWrist.y < shoulderY - 0.05 && rWrist.y < shoulderY - 0.05;
+  const armsWide = Math.abs(lWrist.x - rWrist.x) > 0.4;
+  const wideStance = Math.abs(lAnkle.x - rAnkle.x) > 0.2;
+  const crouching = hipY > 0.6;
+  
+  if (armsUp && wideStance) return "Star jump";
+  if (armsUp) return "Arms up";
+  if (armsWide && wideStance) return "T-pose";
+  if (armsWide) return "Arms wide";
+  if (crouching && wideStance) return "Low squat";
+  if (crouching) return "Crouch";
+  if (wideStance) return "Wide stance";
+  return "Neutral";
+}
+```
+
+## Real-Time Scoring Implementation
+
+**File:** `app/shared/scoring.ts`
+
+### Heuristic Scoring
+
+Choreography-agnostic baseline scoring:
+
+```typescript
+export function computeScore(
+  landmarks: NormalizedLandmark[] | null
+): ScoreFrame {
+  if (!landmarks) {
+    return { ts: Date.now(), score: 0, issues: ["No pose detected"] };
+  }
+  
+  const issues: string[] = [];
+  let score = 70; // Start at 70
+  
+  // 1. Visibility check
+  const avgVisibility = landmarks.reduce((s, l) => 
+    s + (l.visibility ?? 0), 0) / landmarks.length;
+  if (avgVisibility < 0.5) {
+    score -= 15;
+    issues.push("Low pose confidence");
+  }
+  
+  // 2. Arm height check
+  const avgWristY = (leftWrist.y + rightWrist.y) / 2;
+  const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+  if (avgWristY > avgShoulderY + 0.15) {
+    score -= 10;
+    issues.push("Arms too low");
+  }
+  
+  // 3. Arm symmetry check
+  const armDiff = Math.abs(leftWrist.y - rightWrist.y);
+  if (armDiff > 0.18) {
+    score -= 8;
+    issues.push("Arms uneven");
+  }
+  
+  // 4. Motion energy (requires history)
+  if (history.length >= 3) {
+    const prev = history[history.length - 3];
+    const curr = history[history.length - 1];
+    let totalDisp = 0;
+    for (let i = 0; i < curr.length; i++) {
+      const dx = curr[i].x - prev[i].x;
+      const dy = curr[i].y - prev[i].y;
+      totalDisp += Math.sqrt(dx * dx + dy * dy);
+    }
+    const avgDisp = totalDisp / curr.length;
+    
+    if (avgDisp < 0.008) {
+      score -= 12;
+      issues.push("Not moving enough");
+    } else if (avgDisp > 0.12) {
+      score -= 8;
+      issues.push("Moving too chaotically");
+    } else {
+      score += 10; // Bonus for good motion
+    }
+  }
+  
+  return { ts: Date.now(), score: Math.max(0, Math.min(100, score)), issues };
+}
+```
+
+### Pose Summary for Coach
+
+```typescript
+export function buildPoseSummary(
+  landmarks: NormalizedLandmark[] | null,
+  frame: ScoreFrame
+): PoseSummary {
+  return {
+    score: frame.score,
+    confidence: avgVisibility,
+    body: {
+      armHeight: round(avgWristY - avgShoulderY),
+      armSymmetry: round(Math.abs(lWrist.y - rWrist.y)),
+      motionEnergy: round(totalDisp / count),
+      torsoLean: round(hipCX - shoulderCX),
+      kneeBend: round((lKnee.y - lHip.y + rKnee.y - rHip.y) / 2)
+    },
+    issues: frame.issues,
+    trend: computeTrend(),
+    sessionSeconds: Math.round((Date.now() - sessionStart) / 1000),
+    reference: comparePosesDetailed(refLandmarks, landmarks) // If available
+  };
+}
+```
+
+### EMA Smoothing
+
+Smooth score over time to reduce jitter:
+
+```typescript
+const EMA_ALPHA = 0.15;
+const DEAD_ZONE = 2;
+
+if (smoothedScore === null) {
+  smoothedScore = rawScore;
+} else {
+  const candidate = EMA_ALPHA * rawScore + (1 - EMA_ALPHA) * smoothedScore;
+  if (Math.abs(candidate - smoothedScore) > DEAD_ZONE) {
+    smoothedScore = candidate;
+  }
+}
+```
+
+**Alpha = 0.15:** Heavily weights history (85%), reacts slowly to changes  
+**Dead zone = 2:** Ignores fluctuations smaller than 2 points
+
+## Performance Optimization
+
+### Frame Rate Management
+
+- **Target:** 30fps webcam processing
+- **Fallback:** Automatically reduce input resolution if FPS < 15
+- **Canvas size:** Match video dimensions, max 640px for performance
+
+### Landmark Caching
+
+- **History size:** 15 frames (0.5 seconds at 30fps)
+- **Rolling window:** Shift oldest frame when full
+- **Motion energy:** Compare current to frame 3 steps back (0.1s lag)
+
+### Visibility Thresholds
+
+```typescript
+const MIN_VISIBILITY = 0.3;
+const MIN_AVG_VISIBILITY = 0.5;
+```
+
+- Landmarks below 0.3 treated as missing
+- Average visibility below 0.5 triggers "Low confidence" warning
+
+## Edge Cases & Handling
+
+### Missing Landmarks
+
+- **Reference-centric approach:** Only penalize if reference has landmark but user doesn't
+- **Penalty:** Maximum distance (THRESH_OK * 2)
+- **Visual:** Red connection on skeleton overlay
+
+### Occlusion
+
+- MediaPipe returns low visibility scores for occluded joints
+- Treated as missing if visibility < 0.3
+- User not penalized for reference occlusions
+
+### Off-Screen Poses
+
+- Normalized coordinates can exceed [0,1] if limbs extend beyond frame
+- Distance calculation still works (uses actual positions)
+- Visual clamping only for rendering, not for scoring
+
+### Aspect Ratio Extremes
+
+- Normalization algorithm handles ratios from 1:1 (square) to 21:9 (ultrawide)
+- Tested with 4:3 webcams vs 16:9 YouTube videos
+- Torso scaling ensures comparable geometry
+
+## Related Pages
+
+- [System Architecture](/advanced/architecture)
+- [AI Integrations](/advanced/ai-integrations)
+- [Video Processing Pipeline](/advanced/video-processing)

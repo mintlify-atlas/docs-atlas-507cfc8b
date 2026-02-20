@@ -1,0 +1,523 @@
+---
+title: Installation
+description: Complete setup guide for Jiggle Wiggle with prerequisites, environment configuration, and troubleshooting
+---
+
+# Installation
+
+This guide covers the complete installation process for Jiggle Wiggle, including all dependencies, environment setup, and platform-specific instructions.
+
+## System requirements
+
+### Minimum requirements
+
+- **Operating System:** macOS 10.15+, Windows 10+, or Linux (Ubuntu 20.04+)
+- **Node.js:** Version 18.0.0 or higher
+- **RAM:** 4GB minimum (8GB recommended)
+- **Camera:** Webcam with 720p resolution or higher
+- **Browser:** Chrome 90+, Firefox 88+, or Edge 90+ (Safari not fully supported)
+
+### Recommended requirements
+
+- **Node.js:** Version 20.0.0 or higher
+- **RAM:** 8GB or more for smooth pose processing
+- **Camera:** 1080p webcam for best pose detection accuracy
+- **Internet:** 10+ Mbps for video downloads and API calls
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Node.js">
+    Download and install Node.js 18+ from [nodejs.org](https://nodejs.org/).
+    
+    Verify installation:
+    ```bash
+    node --version
+    # Should output: v18.0.0 or higher
+    
+    npm --version
+    # Should output: 9.0.0 or higher
+    ```
+  </Step>
+
+  <Step title="Install yt-dlp">
+    yt-dlp is required for downloading YouTube videos.
+    
+    <CodeGroup>
+    ```bash macOS (Homebrew)
+    brew install yt-dlp
+    ```
+    
+    ```bash Linux (Ubuntu/Debian)
+    sudo apt update
+    sudo apt install yt-dlp
+    ```
+    
+    ```bash Windows (Chocolatey)
+    choco install yt-dlp
+    ```
+    
+    ```bash Python pip (cross-platform)
+    pip install yt-dlp
+    ```
+    </CodeGroup>
+    
+    Verify installation:
+    ```bash
+    yt-dlp --version
+    # Should output version number
+    ```
+    
+    <Warning>
+      yt-dlp must be available on your system PATH. Test by running `yt-dlp --version` from any directory.
+    </Warning>
+  </Step>
+
+  <Step title="Install ffmpeg">
+    ffmpeg is used by yt-dlp for video processing and format conversion.
+    
+    <CodeGroup>
+    ```bash macOS (Homebrew)
+    brew install ffmpeg
+    ```
+    
+    ```bash Linux (Ubuntu/Debian)
+    sudo apt update
+    sudo apt install ffmpeg
+    ```
+    
+    ```bash Windows (Chocolatey)
+    choco install ffmpeg
+    ```
+    </CodeGroup>
+    
+    Verify installation:
+    ```bash
+    ffmpeg -version
+    # Should output version and build information
+    ```
+  </Step>
+
+  <Step title="Obtain API keys">
+    You'll need API keys for AI features:
+    
+    **Required:**
+    - [OpenAI API key](https://platform.openai.com/api-keys) - For AI coaching and reports
+    - [Groq API key](https://console.groq.com/keys) - For vision-based scoring
+    
+    **Optional:**
+    - [xAI API key](https://x.ai/api) - For Grok video generation
+    - [Perplexity API key](https://www.perplexity.ai/settings/api) - For AI video research
+    - [ElevenLabs API key](https://elevenlabs.io/) - For enhanced TTS voice quality
+    
+    <Note>
+      Without OpenAI and Groq keys, the app will run but AI coaching and vision scoring will be disabled.
+    </Note>
+  </Step>
+</Steps>
+
+## Project setup
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/your-org/jigglewiggle.git
+    cd jigglewiggle
+    ```
+    
+    Or download and extract the source code ZIP from GitHub releases.
+  </Step>
+
+  <Step title="Install npm dependencies">
+    ```bash
+    npm install
+    ```
+    
+    This installs all required packages:
+    
+    **Core dependencies:**
+    - `next@16.1.6` - Next.js framework
+    - `react@19.2.3` & `react-dom@19.2.3` - React library
+    - `@mediapipe/pose@0.5.1675469404` - Pose detection
+    - `openai@6.22.0` - OpenAI SDK for coaching
+    - `@vercel/blob@2.2.0` - Blob storage utilities
+    
+    **Development dependencies:**
+    - `typescript@5` - Type checking
+    - `tailwindcss@4` - Styling
+    - `vitest@4.0.18` - Testing framework
+    
+    <Tip>
+      Installation typically takes 2-5 minutes depending on your internet speed.
+    </Tip>
+  </Step>
+
+  <Step title="Configure environment variables">
+    Create `.env.local` in the project root:
+    
+    ```bash
+    touch .env.local
+    ```
+    
+    Add your API keys:
+    
+    ```bash .env.local
+    # ===== REQUIRED =====
+    
+    # OpenAI API key for AI coaching and performance reports
+    # Get yours at: https://platform.openai.com/api-keys
+    OPENAI_API_KEY=sk-proj-...
+    
+    # Groq API key for vision-based pose scoring
+    # Get yours at: https://console.groq.com/keys
+    GROQ_API_KEY=gsk_...
+    
+    # ===== OPTIONAL =====
+    
+    # xAI API key for Grok video generation
+    # Get yours at: https://x.ai/api
+    XAI_API_KEY=xai-...
+    
+    # Perplexity API key for AI video research
+    # Get yours at: https://www.perplexity.ai/settings/api
+    PERPLEXITY_API_KEY=pplx-...
+    
+    # ElevenLabs API key for enhanced TTS (falls back to OpenAI TTS)
+    # Get yours at: https://elevenlabs.io/
+    ELEVENLABS_API_KEY=...
+    ```
+    
+    <Warning>
+      Never commit `.env.local` to version control. It's already in `.gitignore`.
+    </Warning>
+  </Step>
+
+  <Step title="Verify installation">
+    Run the build command to check for any issues:
+    
+    ```bash
+    npm run build
+    ```
+    
+    If successful, you should see:
+    ```
+    ✓ Compiled successfully
+    ✓ Collecting page data
+    ✓ Generating static pages
+    ✓ Finalizing page optimization
+    ```
+  </Step>
+</Steps>
+
+## Running the application
+
+<Tabs>
+  <Tab title="Development mode">
+    Start the development server with hot reloading:
+    
+    ```bash
+    npm run dev
+    ```
+    
+    The app will be available at [http://localhost:3000](http://localhost:3000)
+    
+    **Development features:**
+    - Hot module replacement (HMR)
+    - Detailed error overlays
+    - Source maps for debugging
+    - React DevTools support
+  </Tab>
+  
+  <Tab title="Production mode">
+    Build and run the optimized production version:
+    
+    ```bash
+    npm run build
+    npm run start
+    ```
+    
+    The app will be available at [http://localhost:3000](http://localhost:3000)
+    
+    **Production optimizations:**
+    - Minified JavaScript bundles
+    - Optimized images and assets
+    - Server-side rendering (SSR)
+    - Automatic code splitting
+  </Tab>
+  
+  <Tab title="Testing">
+    Run the test suite with Vitest:
+    
+    ```bash
+    # Run tests once
+    npm run test
+    
+    # Run tests in watch mode
+    npm run test:watch
+    ```
+    
+    <Note>
+      The current test suite is minimal. Contributions are welcome!
+    </Note>
+  </Tab>
+</Tabs>
+
+## Video storage configuration
+
+By default, downloaded videos are stored in `/tmp/jigglewiggle/` with the following characteristics:
+
+- **Location:** `/tmp/jigglewiggle/{videoId}.mp4`
+- **Retention:** Files persist until system reboot or manual deletion
+- **Cache behavior:** If a video ID already exists, it's served from cache (no re-download)
+
+### Custom storage location
+
+To change the storage directory, edit `app/api/download/route.ts`:
+
+```typescript app/api/download/route.ts
+const VIDEO_DIR = "/tmp/jigglewiggle"; // Change this path
+```
+
+<Warning>
+  Ensure the Node.js process has write permissions to your custom directory.
+</Warning>
+
+## Architecture details
+
+Understanding the architecture helps with debugging and customization:
+
+### Data flow
+
+```
+Client submits YouTube URL
+  ↓
+POST /api/download (spawns yt-dlp)
+  ↓
+SSE stream: progress → done → classified
+  ↓
+Video saved to /tmp/jigglewiggle/{id}.mp4
+  ↓
+Client requests GET /api/video/{id}
+  ↓
+Server streams MP4 with range support
+  ↓
+Client extracts poses (MediaPipe, 10fps)
+  ↓
+Webcam pose tracking (MediaPipe, 30fps)
+  ↓
+Real-time scoring + POST /api/coach
+  ↓
+OpenAI generates coaching + TTS audio
+  ↓
+Video ends → POST /api/report
+  ↓
+GPT-4o-mini generates report card
+```
+
+### Key endpoints
+
+**POST /api/download**
+- Accepts: `{ videoId: string }`
+- Returns: SSE stream with progress events
+- Implementation: `app/api/download/route.ts:42`
+
+```typescript Example request
+fetch('/api/download', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ videoId: 'dQw4w9WgXcQ' })
+});
+```
+
+**GET /api/video/[id]**
+- Accepts: Video ID in URL path
+- Returns: MP4 video stream with range support
+- Implementation: `app/api/video/[id]/route.ts`
+
+**POST /api/coach**
+- Accepts: `{ summary: PoseSummary, history: Message[], mode: 'dance' | 'gym' }`
+- Returns: `{ message: string, audio?: string }` (audio is base64 MP3)
+- Implementation: `app/api/coach/route.ts:59`
+
+```typescript Example request
+fetch('/api/coach', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    summary: { score: 85, armHeight: 'high', energy: 'active' },
+    history: [],
+    mode: 'dance'
+  })
+});
+```
+
+### Client-side libraries
+
+**MediaPipe Pose** is loaded from CDN (not bundled):
+
+```typescript app/lib/pose.ts
+import type { Pose } from '@mediapipe/pose';
+
+export async function loadPose(): Promise<Pose> {
+  const { Pose } = await import('@mediapipe/pose');
+  const pose = new Pose({
+    locateFile: (file) => 
+      `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+  });
+  // ... configuration
+  return pose;
+}
+```
+
+This keeps the Next.js bundle small (~200KB vs ~20MB with bundled WASM).
+
+## Troubleshooting
+
+### Common issues
+
+<AccordionGroup>
+  <Accordion title="Error: yt-dlp not found">
+    **Symptom:** Download fails with "spawn yt-dlp ENOENT"
+    
+    **Solution:**
+    1. Verify yt-dlp is installed: `yt-dlp --version`
+    2. Add to PATH if installed in non-standard location
+    3. Restart terminal/IDE after installation
+    4. On Windows, use full path in spawn command if needed
+  </Accordion>
+
+  <Accordion title="Error: OPENAI_API_KEY not set">
+    **Symptom:** AI coach returns "Set OPENAI_API_KEY in .env.local"
+    
+    **Solution:**
+    1. Create `.env.local` in project root (not in `app/` directory)
+    2. Add: `OPENAI_API_KEY=sk-proj-...`
+    3. Restart dev server: `npm run dev`
+    4. Verify key is valid at [OpenAI dashboard](https://platform.openai.com/api-keys)
+  </Accordion>
+
+  <Accordion title="Camera not detected">
+    **Symptom:** Webcam feed shows black screen or error
+    
+    **Solution:**
+    1. Grant camera permissions in browser (click lock icon in address bar)
+    2. Close other apps using camera (Zoom, Skype, etc.)
+    3. Try different browser (Chrome works best)
+    4. Check camera works in system settings
+    5. Use HTTPS or localhost (camera API requires secure context)
+  </Accordion>
+
+  <Accordion title="Pose detection not tracking">
+    **Symptom:** Skeleton overlay not appearing or not following movements
+    
+    **Solution:**
+    1. Ensure full body visible in frame (head to feet)
+    2. Improve lighting - MediaPipe needs good visibility
+    3. Remove busy background patterns if possible
+    4. Move 6-8 feet back from camera
+    5. Check browser console for MediaPipe errors
+    6. Verify WebGL support: visit [webglreport.com](https://webglreport.com)
+  </Accordion>
+
+  <Accordion title="Video playback issues">
+    **Symptom:** Downloaded video won't play or seeking doesn't work
+    
+    **Solution:**
+    1. Verify ffmpeg is installed: `ffmpeg -version`
+    2. Check video file exists: `ls /tmp/jigglewiggle/`
+    3. Try different YouTube video (some have DRM/restrictions)
+    4. Clear `/tmp/jigglewiggle/` and re-download
+    5. Check browser console for HTTP range request errors
+  </Accordion>
+
+  <Accordion title="Slow performance / low FPS">
+    **Symptom:** Pose detection laggy, frame rate drops below 15fps
+    
+    **Solution:**
+    1. Close unnecessary browser tabs and applications
+    2. Lower webcam resolution in system settings (720p is sufficient)
+    3. Disable hardware acceleration in browser if causing issues
+    4. Use Chrome (better WASM performance than Firefox/Safari)
+    5. Upgrade hardware if consistently below 15fps
+  </Accordion>
+
+  <Accordion title="Build errors after npm install">
+    **Symptom:** TypeScript or build errors after installing dependencies
+    
+    **Solution:**
+    1. Delete `node_modules/` and `package-lock.json`
+    2. Clear npm cache: `npm cache clean --force`
+    3. Reinstall: `npm install`
+    4. Verify Node.js version: `node --version` (must be 18+)
+    5. Update npm: `npm install -g npm@latest`
+  </Accordion>
+</AccordionGroup>
+
+### Debug mode
+
+Enable verbose logging by adding to `.env.local`:
+
+```bash .env.local
+NEXT_PUBLIC_DEBUG=true
+```
+
+This enables:
+- Detailed pose detection logs
+- Scoring algorithm metrics
+- API request/response logging
+- MediaPipe performance stats
+
+### Performance monitoring
+
+Check real-time performance in browser console:
+
+```javascript Browser Console
+// MediaPipe FPS
+[MediaPipe] Current FPS: 28.4
+
+// Scoring latency
+[Scoring] Frame scoring: 12ms
+
+// Coach API response time
+[Coach] API round-trip: 847ms
+```
+
+## Platform-specific notes
+
+### macOS
+
+- **Camera permissions:** macOS may prompt for camera access at system level. Grant in System Settings → Privacy & Security → Camera
+- **Homebrew recommended:** Simplest way to install yt-dlp and ffmpeg
+- **Apple Silicon (M1/M2):** All dependencies have native ARM builds
+
+### Windows
+
+- **PowerShell vs CMD:** Use PowerShell for better Unicode support
+- **PATH configuration:** After installing yt-dlp/ffmpeg, restart terminal
+- **Windows Defender:** May scan downloaded videos, causing slight delay
+- **Chocolatey package manager:** Recommended for dependency installation
+
+### Linux
+
+- **Ubuntu/Debian:** Use apt package manager as shown above
+- **Fedora/RHEL:** Use `dnf install yt-dlp ffmpeg`
+- **Arch Linux:** Use `pacman -S yt-dlp ffmpeg`
+- **Permissions:** Ensure `/tmp/` is writable (usually is by default)
+- **Headless servers:** Not supported (requires browser with camera access)
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart guide" icon="rocket" href="/quickstart">
+    Run your first coaching session in under 5 minutes
+  </Card>
+  <Card title="API reference" icon="code" href="/api/download">
+    Learn about endpoints and integration options
+  </Card>
+  <Card title="Chrome extension" icon="puzzle-piece" href="/integrations/chrome-extension">
+    Install the one-click YouTube import extension
+  </Card>
+  <Card title="Explore features" icon="sparkles" href="/features/overview">
+    Discover all core features and capabilities
+  </Card>
+</CardGroup>

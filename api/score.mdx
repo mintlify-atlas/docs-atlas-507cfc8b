@@ -1,0 +1,283 @@
+---
+title: "POST /api/score"
+description: "AI-powered pose comparison using Groq vision models"
+---
+
+Compares a live webcam frame against a reference dance/exercise frame using Groq's Llama Vision model for detailed pose matching and feedback.
+
+## Endpoint
+
+```
+POST /api/score
+```
+
+## Request Body
+
+<ParamField body="referenceFrame" type="string" required>
+  Base64-encoded JPEG of reference frame from video
+  
+  Do NOT include `data:image/jpeg;base64,` prefix — just the raw base64 string
+</ParamField>
+
+<ParamField body="webcamFrame" type="string" required>
+  Base64-encoded JPEG of current webcam frame
+  
+  Do NOT include `data:image/jpeg;base64,` prefix — just the raw base64 string
+</ParamField>
+
+## Response
+
+<ResponseField name="score" type="number">
+  Overall match score (0-100)
+  
+  Clamped to range [0, 100] and rounded to integer
+</ResponseField>
+
+<ResponseField name="bodyMatch" type="number">
+  Overall body position match score (0-100)
+  
+  Falls back to `score` if not provided by model
+</ResponseField>
+
+<ResponseField name="limbDetail" type="object">
+  Per-limb breakdown (0-100 each)
+  
+  <Expandable title="properties">
+    <ResponseField name="leftArm" type="number">
+      Left arm match score
+    </ResponseField>
+    <ResponseField name="rightArm" type="number">
+      Right arm match score
+    </ResponseField>
+    <ResponseField name="leftLeg" type="number">
+      Left leg match score
+    </ResponseField>
+    <ResponseField name="rightLeg" type="number">
+      Right leg match score
+    </ResponseField>
+    <ResponseField name="torso" type="number">
+      Torso position/angle score
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="feedback" type="string">
+  One short sentence about what to fix
+  
+  Example: `"Raise your left arm to match the reference"`
+</ResponseField>
+
+## System Prompt
+
+From app/api/score/route.ts:4-29:
+
+```typescript
+const SYSTEM_PROMPT = `You are a dance pose comparison engine. You receive two images:
+1. A reference frame from a dance video
+2. A live webcam frame of a dancer trying to match the reference
+
+Compare the dancer's pose to the reference and respond with ONLY valid JSON (no markdown, no extra text):
+{
+  "score": <0-100 overall match>,
+  "bodyMatch": <0-100 how well the overall body position matches>,
+  "limbDetail": {
+    "leftArm": <0-100>,
+    "rightArm": <0-100>,
+    "leftLeg": <0-100>,
+    "rightLeg": <0-100>,
+    "torso": <0-100>
+  },
+  "feedback": "<one short sentence about what to fix>"
+}
+
+Score guidelines:
+- 90-100: Nearly identical pose
+- 70-89: Good match, minor limb differences
+- 50-69: Roughly right idea, some limbs off
+- 30-49: Partially matching, major differences
+- 0-29: Very different poses
+
+The webcam image may be non-mirrored. Focus on the spatial pose shape, not left/right labeling.`;
+```
+
+## Groq Configuration
+
+From app/api/score/route.ts:50-81:
+
+```typescript
+const groq = new OpenAI({
+  apiKey,
+  baseURL: "https://api.groq.com/openai/v1",
+});
+
+const completion = await groq.chat.completions.create({
+  model: "meta-llama/llama-4-scout-17b-16e-instruct",
+  messages: [
+    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Compare these two poses:" },
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/jpeg;base64,${referenceFrame}`,
+          },
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/jpeg;base64,${webcamFrame}`,
+          },
+        },
+      ],
+    },
+  ],
+  response_format: { type: "json_object" },
+  temperature: 0.3,
+  max_tokens: 150,
+});
+```
+
+## Example Request
+
+```typescript
+// Capture frames from video and webcam
+const canvas = document.createElement('canvas');
+convas.width = 640;
+canvas.height = 480;
+
+const ctx = canvas.getContext('2d');
+
+// Reference frame from video
+ctx.drawImage(videoElement, 0, 0, 640, 480);
+const referenceFrame = canvas.toDataURL('image/jpeg', 0.8)
+  .split(',')[1]; // Remove data:image/jpeg;base64, prefix
+
+// Webcam frame
+ctx.drawImage(webcamElement, 0, 0, 640, 480);
+const webcamFrame = canvas.toDataURL('image/jpeg', 0.8)
+  .split(',')[1];
+
+const response = await fetch('/api/score', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    referenceFrame,
+    webcamFrame
+  })
+});
+
+const result = await response.json();
+```
+
+## Example Response
+
+```json
+{
+  "score": 72,
+  "bodyMatch": 75,
+  "limbDetail": {
+    "leftArm": 85,
+    "rightArm": 90,
+    "leftLeg": 65,
+    "rightLeg": 70,
+    "torso": 80
+  },
+  "feedback": "Raise your left leg higher to match the reference angle"
+}
+```
+
+## Error Responses
+
+### Missing API Key
+
+```json
+{
+  "error": "GROQ_API_KEY not configured"
+}
+```
+
+Status: `501 Not Implemented`
+
+Requires `GROQ_API_KEY` environment variable.
+
+### Missing Frames
+
+```json
+{
+  "error": "Missing referenceFrame or webcamFrame"
+}
+}
+```
+
+Status: `400 Bad Request`
+
+### Model Response Parsing Error
+
+```json
+{
+  "error": "Failed to parse model response",
+  "raw": "...original model output..."
+}
+```
+
+Status: `502 Bad Gateway`
+
+### Groq API Failure
+
+```json
+{
+  "error": "Groq API call failed"
+}
+```
+
+Status: `502 Bad Gateway`
+
+## Performance Notes
+
+- Uses Llama 4 Scout 17B vision model (fast inference)
+- Temperature set to 0.3 for consistent scoring
+- Max tokens limited to 150 for quick responses
+- Response format enforced as JSON object for reliable parsing
+- Score automatically clamped to [0, 100] range
+
+## When to Use This Endpoint
+
+This endpoint provides AI-powered visual comparison but is **optional**. The default Jiggle Wiggle scoring uses:
+
+- Client-side MediaPipe Pose for keypoint extraction
+- Geometric scoring in `app/lib/scoring.ts`
+- No server roundtrip required
+
+Use `/api/score` when:
+- You want AI-interpreted feedback text
+- Geometric scoring isn't sufficient
+- You need visual comparison without pose landmarks
+- You have Groq API access and want multimodal scoring
+
+## Integration Pattern
+
+```typescript
+// Hybrid approach: Use geometric scoring as primary,
+// occasionally verify with AI for feedback text
+
+let frameCount = 0;
+
+function onPoseDetected(userPose, refPose) {
+  // Primary: Fast geometric scoring
+  const geometricScore = computeScore(userPose, refPose);
+  
+  // Every 30 frames (~3 seconds at 10fps), get AI feedback
+  if (frameCount % 30 === 0) {
+    const feedback = await fetch('/api/score', {
+      method: 'POST',
+      body: JSON.stringify({ referenceFrame, webcamFrame })
+    }).then(r => r.json());
+    
+    console.log(feedback.feedback); // Display to user
+  }
+  
+  frameCount++;
+}
+```

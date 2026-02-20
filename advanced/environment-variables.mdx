@@ -1,0 +1,233 @@
+---
+title: Environment Variables
+description: Configure API keys and system settings for Jiggle Wiggle
+---
+
+Jiggle Wiggle requires several API keys and environment variables for full functionality. This guide covers all available configuration options.
+
+## Quick Start
+
+Create a `.env.local` file in the project root:
+
+```bash
+OPENAI_API_KEY=sk-...
+GROQ_API_KEY=gsk_...
+XAI_API_KEY=xai-...
+PERPLEXITY_API_KEY=...
+```
+
+## Required Variables
+
+These variables are essential for core functionality:
+
+### OPENAI_API_KEY
+
+**Required for**: AI coaching, performance reports, TTS audio feedback
+
+```bash
+OPENAI_API_KEY=sk-...
+```
+
+- Get your key from [platform.openai.com](https://platform.openai.com/api-keys)
+- Used by `/api/coach` (GPT-4o-mini) and `/api/report` (GPT-4o-mini)
+- Fallback TTS provider if ElevenLabs is not configured
+- **Without this key**: Coach will return generic messages, reports will show fallback text
+
+**Models used**:
+- `gpt-4o-mini` - AI coaching and report generation
+- `tts-1-hd` - Text-to-speech (fallback)
+
+### GROQ_API_KEY
+
+**Required for**: Real-time vision-based pose scoring
+
+```bash
+GROQ_API_KEY=gsk_...
+```
+
+- Get your key from [console.groq.com](https://console.groq.com/keys)
+- Used by `/api/score` for periodic screenshot comparison
+- Scores user pose against reference frames using vision models
+- **Without this key**: Scoring will rely only on geometric pose comparison (reduced accuracy)
+
+**Models used**:
+- `meta-llama/llama-4-scout-17b-16e-instruct` - Vision-based pose comparison
+
+## Optional Variables
+
+These variables enable additional features:
+
+### XAI_API_KEY
+
+**Required for**: AI video generation (Grok)
+
+```bash
+XAI_API_KEY=xai-...
+```
+
+- Get your key from [x.ai](https://x.ai)
+- Used by `/api/generate` for generating workout videos from text descriptions
+- **Without this key**: AI Generate feature will not work
+
+### PERPLEXITY_API_KEY
+
+**Required for**: AI video generation research phase
+
+```bash
+PERPLEXITY_API_KEY=pplx-...
+```
+
+- Get your key from [perplexity.ai](https://www.perplexity.ai/settings/api)
+- Used by `/api/generate` for web-grounded exercise research
+- Provides detailed movement descriptions for video generation
+- **Without this key**: Video generation will work but with less detailed research
+
+**Models used**:
+- `sonar-pro` - Web-grounded research for exercise instructions
+
+### ELEVENLABS_API_KEY
+
+**Required for**: High-quality TTS audio (recommended)
+
+```bash
+ELEVENABS_API_KEY=...
+```
+
+- Get your key from [elevenlabs.io](https://elevenlabs.io)
+- Used by `/api/coach` for higher quality voice synthesis
+- **Without this key**: Falls back to OpenAI TTS (`tts-1-hd`)
+
+**Voice IDs**:
+- Dance mode: `21m00Tcm4TlvDq8ikWAM` (Rachel - bright & expressive)
+- Gym mode: `pNInz6obpgDQGcFmaJgB` (Adam - deep & authoritative)
+
+### MODAL_ENDPOINT_URL
+
+**Required for**: Person segmentation (SAM2)
+
+```bash
+MODAL_ENDPOINT_URL=https://...
+```
+
+- Custom Modal endpoint for running SAM2 segmentation
+- Isolates the dancer from the background
+- **Without this key**: Segmentation overlay will not be available
+
+### REPLICATE_API_TOKEN
+
+**Optional**: Alternative video processing backend
+
+```bash
+REPLICATE_API_TOKEN=r8_...
+```
+
+- Get your key from [replicate.com](https://replicate.com)
+- Currently not used in the main flow but available for extensions
+
+## Deprecated / Unused Variables
+
+These appear in `render.yaml` but are not currently used:
+
+```bash
+BRIGHTDATA_API_TOKEN=...  # Not used
+ZOOM_SDK_KEY=...           # Zoom integration (optional)
+ZOOM_SDK_SECRET=...        # Zoom integration (optional)
+```
+
+## System Variables
+
+These are set automatically by Next.js or the deployment platform:
+
+### NODE_ENV
+
+```bash
+NODE_ENV=production
+```
+
+Set automatically in production builds. Controls Next.js optimizations.
+
+### PORT
+
+```bash
+PORT=3000
+```
+
+The port the server listens on. Defaults to 3000.
+
+### HOSTNAME
+
+```bash
+HOSTNAME="0.0.0.0"
+```
+
+Set in Docker to allow external connections. Defaults to `localhost` in development.
+
+## API Rate Limits
+
+Be aware of rate limits for each service:
+
+| Service | Free Tier Limit | Paid Tier |
+|---------|----------------|----------|
+| OpenAI | Varies by model | Pay-per-token |
+| Groq | 30 requests/min | Higher limits |
+| xAI (Grok) | Limited beta access | Pay-per-request |
+| Perplexity | 5 requests/min (free) | Unlimited (paid) |
+| ElevenLabs | 10,000 chars/month (free) | Tiered pricing |
+
+## Security Best Practices
+
+<Warning>
+Never commit `.env.local` or API keys to version control.
+</Warning>
+
+1. **Use environment variables**: Never hardcode API keys in source code
+2. **Rotate keys regularly**: Regenerate keys periodically
+3. **Limit key permissions**: Use the minimum required scopes
+4. **Monitor usage**: Set up billing alerts to catch unexpected usage spikes
+5. **Use secrets managers**: Consider AWS Secrets Manager, HashiCorp Vault, etc. for production
+
+## Platform-Specific Configuration
+
+### Docker
+
+Pass environment variables via `-e` flags or `.env` file:
+
+```bash
+docker run -p 3000:3000 --env-file .env jiggle-wiggle
+```
+
+### Render
+
+Set environment variables in the Render dashboard:
+
+1. Go to your service settings
+2. Navigate to "Environment"
+3. Add each key-value pair
+4. Variables are encrypted at rest
+
+### Vercel
+
+Set environment variables in the Vercel dashboard or CLI:
+
+```bash
+vercel env add OPENAI_API_KEY
+```
+
+## Validation
+
+To verify your configuration is correct:
+
+```bash
+# Check which keys are set
+node -e "console.log({
+  openai: !!process.env.OPENAI_API_KEY,
+  groq: !!process.env.GROQ_API_KEY,
+  xai: !!process.env.XAI_API_KEY,
+  perplexity: !!process.env.PERPLEXITY_API_KEY
+})"
+```
+
+## Next Steps
+
+- [Deployment](/advanced/deployment) - Deploy to production
+- [Troubleshooting](/advanced/troubleshooting) - Fix API key issues

@@ -1,0 +1,284 @@
+---
+title: "POST /api/report"
+description: "Generate AI-powered performance report cards"
+---
+
+Generates a post-session performance report with personality-driven text, grades, and improvement tips using OpenAI GPT-4o-mini.
+
+## Endpoint
+
+```
+POST /api/report
+```
+
+## Request Body
+
+<ParamField body="stats" type="object" required>
+  Session statistics collected during performance
+  
+  <Expandable title="properties">
+    <ResponseField name="scoreTimeline" type="array">
+      Array of frame-by-frame scores (numbers 0-100)
+    </ResponseField>
+    <ResponseField name="limbTotals" type="object">
+      Cumulative limb scores:
+      ```typescript
+      {
+        [limbName: string]: { sum: number, count: number }
+      }
+      ```
+    </ResponseField>
+    <ResponseField name="frameHits" type="object">
+      Count of frames at different score ranges:
+      ```typescript
+      { "excellent": 15, "good": 42, "needs-work": 23 }
+      ```
+    </ResponseField>
+    <ResponseField name="peakScore" type="number">
+      Highest score achieved in session
+    </ResponseField>
+    <ResponseField name="totalFrames" type="number">
+      Total number of frames analyzed
+    </ResponseField>
+    <ResponseField name="sessionDurationMs" type="number">
+      Session duration in milliseconds
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="mode" type="string">
+  App mode: `"dance"` or `"gym"`
+  
+  Determines report tone and terminology
+</ParamField>
+
+<ParamField body="videoTitle" type="string">
+  Title of the video the user was following
+</ParamField>
+
+## Response
+
+<ResponseField name="grade" type="string">
+  Letter grade: `"S"`, `"A"`, `"B"`, `"C"`, or `"D"`
+  
+  Based on average score:
+  - S: 78+
+  - A: 62-77
+  - B: 45-61
+  - C: 30-44
+  - D: &lt;30
+</ResponseField>
+
+<ResponseField name="headline" type="string">
+  Punchy 2-5 word headline (Spotify Wrapped style)
+  
+  Example: `"Dance Floor Domination"`, `"The Warm-Up Warrior"`
+</ResponseField>
+
+<ResponseField name="persona" type="string">
+  Fun archetype name
+  
+  Example: `"The Firecracker"`, `"The Machine"`, `"The Standing Ovation (For Standing Still)"`
+</ResponseField>
+
+<ResponseField name="personaDesc" type="string">
+  One sentence persona description
+  
+  Example: `"You didn't just dance — you ATE"`, `"Your right arm was giving main character energy. The rest of you was background extra"`
+</ResponseField>
+
+<ResponseField name="summary" type="string">
+  Witty 1-2 sentence performance wrap-up
+</ResponseField>
+
+<ResponseField name="tips" type="array">
+  2-3 specific improvement tips based on weak areas
+  
+  Example: `["Focus on matching arm positions", "Try slowing the video down to learn the moves"]`
+</ResponseField>
+
+<ResponseField name="bestLimb" type="string">
+  Human-readable best limb name
+  
+  Example: `"Right Arm"`
+</ResponseField>
+
+<ResponseField name="worstLimb" type="string">
+  Human-readable worst limb name
+  
+  Example: `"Left Leg"`
+</ResponseField>
+
+## Grade Calculation
+
+From app/api/report/route.ts:25-31:
+
+```typescript
+function computeGrade(avg: number): AIReport["grade"] {
+  if (avg >= 78) return "S";
+  if (avg >= 62) return "A";
+  if (avg >= 45) return "B";
+  if (avg >= 30) return "C";
+  return "D";
+}
+```
+
+## AI Report Generation
+
+### Dance Mode Prompt
+
+From app/api/report/route.ts:48-71 (excerpt):
+
+```typescript
+const DANCE_SYSTEM_PROMPT = `You are a post-performance report card generator for a dance coaching app. You'll receive session stats and must return a JSON object with personality-driven text.
+
+TONE SCALES WITH GRADE:
+- S/A grades: full hype, celebration, legendary status ("You didn't just dance — you ATE")
+- B grade: encouraging with playful jabs ("Not bad! Your legs had ideas... different ideas, but ideas")
+- C grade: witty roasts, backhanded compliments ("Your right arm was giving main character energy. The rest of you was background extra")
+- D grade: full savage mode, comedic destruction ("The video was dancing. You were... present. Emotionally. Physically is debatable")
+
+For low scores, be funny and savage — roast them like a friend would. Never mean-spirited, always comedic. Think Spotify Wrapped meets a roast battle.
+
+Return ONLY the JSON object. No markdown, no code fences, no explanation.`;
+```
+
+### Gym Mode Prompt
+
+Uses exercise and training language instead of dance terminology. Tone examples:
+- S/A: `"Form so clean it made the weights jealous"`, `"Built different. Literally."`
+- D: `"The equipment got more of a workout than you did. At least you burned calories walking in."`
+
+## Example Request
+
+```typescript
+const response = await fetch('/api/report', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    stats: {
+      scoreTimeline: [45, 52, 48, 67, 72, 68, 75, 80, 78, 82],
+      limbTotals: {
+        rightArm: { sum: 850, count: 10 },
+        leftArm: { sum: 600, count: 10 },
+        rightLeg: { sum: 750, count: 10 },
+        leftLeg: { sum: 700, count: 10 },
+        torso: { sum: 800, count: 10 }
+      },
+      frameHits: {
+        "excellent": 3,
+        "good": 5,
+        "needs-work": 2
+      },
+      peakScore: 82,
+      totalFrames: 10,
+      sessionDurationMs: 60000
+    },
+    mode: 'dance',
+    videoTitle: 'Hip Hop Basics Tutorial'
+  })
+});
+
+const report = await response.json();
+```
+
+## Example Response (High Score)
+
+```json
+{
+  "grade": "A",
+  "headline": "Dance Floor Domination",
+  "persona": "The Firecracker",
+  "personaDesc": "You came in hot and stayed hot. Your moves had ENERGY.",
+  "summary": "You averaged 67 across the session with a peak of 82. That final section? Chef's kiss.",
+  "tips": [
+    "Your left arm lagged behind — try mirroring exercises to build symmetry",
+    "Focus on transitions between moves for even smoother flow",
+    "You've got the fundamentals down — time to add your own style"
+  ],
+  "bestLimb": "Right Arm",
+  "worstLimb": "Left Arm"
+}
+```
+
+## Example Response (Low Score)
+
+```json
+{
+  "grade": "D",
+  "headline": "Spectator Mode Activated",
+  "persona": "The Standing Ovation (For Standing Still)",
+  "personaDesc": "The video was dancing. You were... present. Emotionally. Physically is debatable.",
+  "summary": "Your torso showed up. Your limbs? They were on a different Zoom call.",
+  "tips": [
+    "Start with the tutorial slowed to 0.5x speed — master one move at a time",
+    "Your left arm needs a full intervention. Practice arm isolations daily.",
+    "Try dancing in front of a mirror so you can see what the camera sees"
+  ],
+  "bestLimb": "Torso",
+  "worstLimb": "Left Arm"
+}
+```
+
+## Fallback Behavior
+
+### No OpenAI API Key
+
+Returns generic report based on grade:
+
+```json
+{
+  "grade": "B",
+  "headline": "Not Bad!",
+  "persona": "The Dancer",
+  "personaDesc": "You showed up and gave it your all!",
+  "summary": "You scored an average of 56 across the session.",
+  "tips": [
+    "Focus on matching arm positions",
+    "Try slowing the video down to learn the moves",
+    "Practice the tricky sections on repeat"
+  ],
+  "bestLimb": "Right Arm",
+  "worstLimb": "Left Leg"
+}
+```
+
+### LLM Returns Malformed JSON
+
+Safely parses and provides fallback values. Never returns an error to client.
+
+## OpenAI Configuration
+
+From app/api/report/route.ts:170-178:
+
+```typescript
+const completion = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userContent },
+  ],
+  max_tokens: 400,
+  temperature: 0.9,
+});
+```
+
+## Error Response
+
+```json
+{
+  "error": "Failed to generate report"
+}
+```
+
+Status: `500 Internal Server Error`
+
+Only returned on catastrophic failure. Normal LLM errors fall back to generic report.
+
+## Integration Notes
+
+- Reports are generated once at session end
+- Client collects stats throughout session and sends in single request
+- Limb averages computed server-side from cumulative totals
+- Personality and tone automatically match the mode (dance vs. gym)
+- Designed for social sharing (Spotify Wrapped-style cards)

@@ -1,0 +1,251 @@
+---
+title: "POST /api/segment"
+description: "SAM2 video segmentation for background removal"
+---
+
+Performs AI-powered video segmentation using Meta's Segment Anything Model 2 (SAM2) via Modal serverless GPU backend. Generates a mask video for background removal.
+
+## Endpoint
+
+```
+POST /api/segment
+```
+
+## Configuration
+
+- **Max Duration:** 10 minutes (600 seconds)
+- **Modal Endpoint:** `https://aryankeluskar--jigglewiggle-sam2-sam2model-segment.modal.run`
+
+## Request Body
+
+<ParamField body="videoId" type="string" required>
+  YouTube video ID (11-character alphanumeric string with dashes/underscores)
+  
+  Must exist at `/tmp/jigglewiggle/{videoId}.mp4`
+</ParamField>
+
+## Response
+
+<ResponseField name="cached" type="boolean">
+  `true` if segmentation is complete (either just processed or already cached)
+  
+  Mask video available at `/api/video/{videoId}_mask`
+</ResponseField>
+
+## Caching Behavior
+
+Mask videos are cached at `/tmp/jigglewiggle/{videoId}_mask.mp4`.
+
+```typescript
+function maskPath(videoId: string) {
+  return path.join(VIDEO_DIR, `${videoId}_mask.mp4`);
+}
+```
+
+On cache hit, returns immediately:
+
+```json
+{
+  "cached": true
+}
+```
+
+## Segmentation Pipeline
+
+From app/api/segment/route.ts:41-88 (simplified):
+
+```typescript
+// 1. Read original video
+const buffer = await readFile(filePath);
+const videoBase64 = buffer.toString("base64");
+
+// 2. Send to Modal endpoint
+const modalRes = await fetch(MODAL_ENDPOINT_URL, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ video_base64: videoBase64 }),
+  signal: controller.signal,
+});
+
+// 3. Receive mask video
+const result = await modalRes.json();
+const maskBuffer = Buffer.from(result.mask_video_base64, "base64");
+
+// 4. Save to disk
+await writeFile(maskPath(videoId), maskBuffer);
+
+return Response.json({ cached: true });
+```
+
+## Example Request
+
+```typescript
+const response = await fetch('/api/segment', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    videoId: 'dQw4w9WgXcQ'
+  })
+});
+
+const { cached } = await response.json();
+
+if (cached) {
+  // Mask video ready at /api/video/dQw4w9WgXcQ_mask
+  const maskVideo = document.createElement('video');
+  maskVideo.src = '/api/video/dQw4w9WgXcQ_mask';
+}
+```
+
+## Using the Mask Video
+
+```html
+<!-- Original video -->
+<video id="original" src="/api/video/dQw4w9WgXcQ"></video>
+
+<!-- Mask video (black background, white subject) -->
+<video id="mask" src="/api/video/dQw4w9WgXcQ_mask"></video>
+
+<script>
+  // Apply mask using CSS mix-blend-mode or WebGL shader
+  const original = document.getElementById('original');
+  const mask = document.getElementById('mask');
+  
+  // Sync playback
+  original.ontimeupdate = () => {
+    mask.currentTime = original.currentTime;
+  };
+</script>
+```
+
+## Error Responses
+
+### Invalid Video ID
+
+```json
+{
+  "error": "Invalid video ID"
+}
+```
+
+Status: `400 Bad Request`
+
+### Video Not Downloaded
+
+```json
+{
+  "error": "Video not yet downloaded"
+}
+```
+
+Status: `404 Not Found`
+
+Call `/api/download` first.
+
+### Modal Segmentation Error
+
+```json
+{
+  "error": "Modal returned 500: Internal Server Error"
+}
+```
+
+Status: `500 Internal Server Error`
+
+### Timeout
+
+Request aborted after 10 minutes:
+
+```json
+{
+  "error": "The operation was aborted"
+}
+```
+
+Status: `500 Internal Server Error`
+
+## Modal Backend
+
+The segmentation runs on Modal's serverless GPU infrastructure. Expected response format:
+
+```json
+{
+  "mask_video_base64": "AAAAIGZ0eXBpc29tAA...",
+  "num_frames": 247
+}
+```
+
+Or on error:
+
+```json
+{
+  "error": "SAM2 segmentation failed: ..."
+}
+```
+
+## Performance Characteristics
+
+- **Cold start:** 20-40 seconds (Modal container initialization)
+- **Warm inference:** 5-15 seconds for 30-second video
+- **Scaling:** Automatically scales with concurrent requests
+- **Cache:** Subsequent requests return instantly
+
+From logs:
+
+```
+[segment] Starting Modal segmentation for dQw4w9WgXcQ (25165824 bytes)
+[segment] Modal segmentation done in 12.3s (247 frames)
+[segment] Saved mask for dQw4w9WgXcQ (18742016 bytes)
+```
+
+## Integration Example
+
+```typescript
+async function prepareVideo(videoId: string) {
+  // 1. Download original video
+  await fetch('/api/download', {
+    method: 'POST',
+    body: JSON.stringify({ videoId })
+  });
+  
+  // 2. Start segmentation (can run in parallel with UI)
+  const segmentPromise = fetch('/api/segment', {
+    method: 'POST',
+    body: JSON.stringify({ videoId })
+  });
+  
+  // 3. Show original video immediately
+  const videoElement = document.getElementById('video');
+  videoElement.src = `/api/video/${videoId}`;
+  
+  // 4. Apply mask when ready
+  const { cached } = await segmentPromise.then(r => r.json());
+  if (cached) {
+    applyBackgroundRemoval(videoId);
+  }
+}
+```
+
+## Health Check
+
+```
+GET /api/segment
+```
+
+Returns:
+
+```json
+{
+  "configured": true
+}
+```
+
+Use to verify endpoint is available before starting segmentation.
+
+## Implementation Notes
+
+- Segmentation is optional — Jiggle Wiggle works without it
+- Mask videos enable custom backgrounds and green screen effects
+- Cached masks persist across server restarts (stored in `/tmp`)
+- Modal endpoint URL is hardcoded — update if redeploying backend
+- 10-minute timeout prevents runaway requests on very long videos

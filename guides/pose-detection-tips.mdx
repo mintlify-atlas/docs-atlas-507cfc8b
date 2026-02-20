@@ -1,0 +1,252 @@
+---
+title: "Pose Detection Tips"
+description: "How to optimize your webcam setup and environment for the best pose detection accuracy and scoring performance"
+---
+
+# Pose Detection Tips
+
+Jiggle Wiggle uses real-time pose detection to track your movements and score your performance. Getting the best results requires proper webcam setup and environment configuration. This guide will help you optimize your setup for accurate pose tracking.
+
+## Understanding Pose Detection
+
+Jiggle Wiggle uses **MediaPipe Pose** running locally in your browser:
+
+- **Client-side processing**: Your webcam feed never leaves your device
+- **Real-time tracking**: 20-30 FPS on typical laptops
+- **33 body landmarks**: Tracks your full body from head to feet
+- **WASM-powered**: Runs efficiently using WebAssembly
+
+<Note>
+All pose detection happens on your device. Your webcam frames are never uploaded to any server, ensuring complete privacy.
+</Note>
+
+## Camera Setup
+
+### Positioning Your Webcam
+
+**Distance**
+- Stand 6-8 feet back from your camera
+- Your full body should be visible in the frame
+- Include space above your head and below your feet
+
+**Height**
+- Position camera at chest height (or slightly higher)
+- Laptop on a table or external webcam on a tripod works best
+- Avoid extreme angles (looking up or down at you)
+
+**Angle**
+- Face the camera directly
+- Center yourself in the frame
+- Keep your body perpendicular to the camera
+
+<Tip>
+Test your framing during the calibration phase. The app will guide you with real-time feedback like "Move back to fit full body" or "Pose detected... Full body visible... Good distance!"
+</Tip>
+
+### Calibration Checklist
+
+Before you start dancing, the calibration system checks:
+
+- ✓ **Pose detected consistently**: Your body is recognized for 1-2 seconds
+- ✓ **Full body visible**: Hips, shoulders, and ankles have high confidence
+- ✓ **Good distance**: You're not too close or too far from the camera
+
+<Note>
+Calibration typically completes in under 10 seconds under normal conditions. Follow the on-screen guidance if calibration takes longer.
+</Note>
+
+## Lighting Optimization
+
+### Best Lighting Setup
+
+**Ideal conditions**:
+- Bright, even lighting across your body
+- Natural daylight or overhead lights
+- Light source in front of you (not behind)
+- No harsh shadows on your body
+
+**Avoid**:
+- Backlighting (window or bright light behind you)
+- Dim rooms or single-direction spotlights
+- Flashing or colored lights (they confuse the AI)
+- Direct sunlight causing overexposure
+
+<Tip>
+If the app shows "Low pose confidence," try adding more light to your space. This is the most common cause of detection issues.
+</Tip>
+
+## Environment Setup
+
+### Background Considerations
+
+**Best backgrounds**:
+- Plain walls (any color works)
+- Consistent, non-busy patterns
+- Static environment (no moving objects)
+- Good contrast between you and the background
+
+**Challenging backgrounds**:
+- Mirrors (can confuse pose detection)
+- Busy patterns or posters
+- Other people moving in the background
+- Cluttered spaces with many objects
+
+<Note>
+Jiggle Wiggle includes person segmentation using SAM2 to help isolate you from the background, but a cleaner background still improves accuracy.
+</Note>
+
+### Space Requirements
+
+**Minimum space**:
+- 6 feet wide × 6 feet deep
+- Enough room to move your arms fully extended
+- Clear area with no obstacles
+
+**Optimal space**:
+- 8-10 feet wide × 8 feet deep
+- Room for jumping, lunging, and dynamic moves
+- Safe distance from furniture and walls
+
+## Maximizing Detection Accuracy
+
+### Visibility Best Practices
+
+**Wear**:
+- Fitted or form-fitting clothing
+- Contrasting colors to your background
+- Clothing that clearly shows your body shape
+
+**Avoid**:
+- Extremely baggy or oversized clothing
+- Colors that match your background exactly
+- Accessories that obscure body landmarks (large bags, flowing scarves)
+
+### Body Position Tips
+
+**During movement**:
+- Keep your full body in frame at all times
+- Avoid turning completely sideways (the AI tracks best from front view)
+- If you go low (squats, floor work), stay within camera view
+- Raise arms fully for dramatic moves (better visibility = better scores)
+
+<Tip>
+The skeleton overlay on your webcam feed shows real-time tracking. If you see gaps or missing joints, adjust your position or lighting.
+</Tip>
+
+## Performance Optimization
+
+### System Requirements
+
+**Recommended**:
+- Modern laptop or desktop (last 5 years)
+- Chrome, Edge, or Safari browser (latest version)
+- Stable webcam (built-in or external)
+- 8GB+ RAM
+
+**Performance tips**:
+- Close unnecessary browser tabs and applications
+- Use a wired internet connection for video downloads
+- Ensure good CPU availability (not running heavy background tasks)
+
+<Note>
+If your pose detection FPS drops below 15, the app will automatically degrade processing to maintain performance.
+</Note>
+
+### Troubleshooting Low FPS
+
+If tracking feels laggy:
+
+1. **Reduce webcam resolution** in browser settings
+2. **Close other applications** using your camera
+3. **Restart your browser** to free up memory
+4. **Check CPU usage** and close heavy background processes
+5. **Try a different browser** (Chrome typically performs best)
+
+## Understanding the Skeleton Overlay
+
+The skeleton drawn on your webcam feed shows:
+
+- **Green lines**: Connections between body landmarks
+- **Pink dots**: Key body points (nose, neck, joints)
+- **Visibility threshold**: Only landmarks with 30%+ confidence are shown
+
+### Interpreting the Overlay
+
+**Good tracking**:
+- All major joints visible and stable
+- Lines connect smoothly
+- Skeleton follows your movements without lag
+
+**Poor tracking**:
+- Missing joints or flickering points
+- Delayed or jittery movement
+- Skeleton disappears intermittently
+
+<Tip>
+If you see poor tracking, check your lighting first, then your distance from the camera. These are the two most common issues.
+</Tip>
+
+## Advanced Tips
+
+<AccordionGroup>
+  <Accordion title="Using an External Webcam">
+    External webcams often provide:
+    - Higher resolution and frame rate
+    - Better low-light performance
+    - Adjustable mounting options
+    - Wider field of view
+    
+    Recommended: Logitech C920 or similar 1080p webcams with good software support.
+  </Accordion>
+
+  <Accordion title="Mirror vs. Non-Mirror Mode">
+    By default, the webcam feed is mirrored (flipped horizontally) so movements feel natural:
+    - When you raise your right arm, it appears on the right side of your screen
+    - This matches what you see in a real mirror
+    - Scoring is unaffected by mirror mode
+    
+    The skeleton tracking works perfectly in both mirrored and non-mirrored views.
+  </Accordion>
+
+  <Accordion title="Multi-Monitor Setup">
+    If you use multiple monitors:
+    - Place the browser window on your primary monitor
+    - Position yourself to face that monitor directly
+    - Ensure webcam is on the same monitor as the app
+    - Avoid looking at a different screen during practice
+  </Accordion>
+
+  <Accordion title="Practicing in Small Spaces">
+    Limited space? Try these adaptations:
+    - Use a wider angle webcam
+    - Choose videos with less lateral movement
+    - Practice upper-body focused routines
+    - Sit or kneel for choreography adaptation
+    - Use slower playback speed (0.5x) to control movement range
+  </Accordion>
+</AccordionGroup>
+
+## Gesture Controls
+
+Once pose detection is working well, you can use hands-free controls:
+
+- **Raise both hands high**: Pause or play the video
+- **No keyboard needed**: Control playback with your body
+- **Stay in the flow**: Keep dancing without breaking movement
+
+<Tip>
+The gesture detection uses the same pose landmarks, so if your skeleton overlay is working well, gesture controls will too.
+</Tip>
+
+## Privacy and Data
+
+Jiggle Wiggle's pose detection is completely private:
+
+- **Local processing only**: MediaPipe runs in your browser using WebAssembly
+- **No video upload**: Your webcam feed never leaves your device
+- **Derived metrics only**: Only pose summaries (coordinates, scores) are used for coaching
+- **No recording**: Your practice sessions aren't saved or transmitted
+
+<Note>
+The only data sent to the server is compact pose summary JSON for AI coaching feedback. No images or video frames are ever uploaded.
+</Note>

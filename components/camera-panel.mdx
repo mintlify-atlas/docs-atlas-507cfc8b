@@ -1,0 +1,186 @@
+---
+title: 'CameraPanel'
+description: 'Live webcam feed with real-time pose detection and segmented overlay projection'
+---
+
+The `CameraPanel` component displays the user's webcam feed with real-time pose tracking, skeleton overlay, and an optional segmented video overlay that dynamically scales and positions itself to match the user's pose.
+
+## Features
+
+- **Live Webcam Feed**: Captures user's camera with mirrored display
+- **Real-time Pose Detection**: Uses MediaPipe Pose to track 33 body landmarks at 640x480
+- **Neon Skeleton Overlay**: Draws cyan/magenta skeleton with configurable style
+- **Segmented Video Overlay**: Projects reference dancer outline onto user's pose with intelligent scaling and positioning
+- **Pose-Based Transformation**: Automatically scales and aligns overlay based on pose bounds comparison
+- **Tight Video Sync**: Syncs overlay video to reference video time with 50ms drift tolerance
+
+## Usage
+
+```tsx
+import CameraPanel from "./components/CameraPanel";
+import type { NormalizedLandmark } from "./lib/pose";
+
+function App() {
+  const [livePose, setLivePose] = useState<NormalizedLandmark[] | null>(null);
+  const [referencePose, setReferencePose] = useState<NormalizedLandmark[] | null>(null);
+  const webcamCaptureRef = useRef<(() => string | null) | null>(null);
+  const webcamStreamRef = useRef<MediaStream | null>(null);
+
+  return (
+    <CameraPanel
+      onPose={setLivePose}
+      segmentedVideoUrl="/api/segmented-video/abc123"
+      referenceVideoTime={5.2}
+      playbackRate={1.0}
+      isReferencePaused={false}
+      referenceVideoAspectRatio={16/9}
+      webcamCaptureRef={webcamCaptureRef}
+      webcamStreamRef={webcamStreamRef}
+      onWebcamAspectRatio={(ratio) => console.log('Webcam aspect:', ratio)}
+      referencePose={referencePose}
+      livePose={livePose}
+    />
+  );
+}
+```
+
+## Props
+
+<ParamField path="onPose" type="(landmarks: NormalizedLandmark[] | null) => void" required>
+  Callback fired on every pose detection frame (~30fps). Receives 33 body landmarks or null if no pose detected.
+</ParamField>
+
+<ParamField path="segmentedVideoUrl" type="string | null">
+  URL to segmented reference video (background removed). When provided, displays scaled overlay on webcam feed.
+</ParamField>
+
+<ParamField path="referenceVideoTime" type="number">
+  Current playback time (seconds) of reference video. Used to sync overlay video.
+</ParamField>
+
+<ParamField path="playbackRate" type="number" default="1">
+  Playback speed multiplier (0.25 to 2.0). Adjusts overlay video playback rate to match reference.
+</ParamField>
+
+<ParamField path="isReferencePaused" type="boolean" default="false">
+  Whether reference video is paused. Controls overlay video play/pause state.
+</ParamField>
+
+<ParamField path="referenceVideoAspectRatio" type="number" default="16/9">
+  Aspect ratio of reference video. Used for overlay scaling calculations.
+</ParamField>
+
+<ParamField path="webcamCaptureRef" type="React.MutableRefObject<(() => string | null) | null>">
+  Ref that receives a function to capture current webcam frame as base64 JPEG.
+</ParamField>
+
+<ParamField path="webcamStreamRef" type="React.MutableRefObject<MediaStream | null>">
+  Ref that receives the active MediaStream for external recording/processing.
+</ParamField>
+
+<ParamField path="onWebcamAspectRatio" type="(aspectRatio: number) => void">
+  Callback fired once when webcam dimensions are known. Returns width/height ratio.
+</ParamField>
+
+<ParamField path="referencePose" type="NormalizedLandmark[] | null">
+  Current reference pose (from video timeline). Used for overlay transformation calculations.
+</ParamField>
+
+<ParamField path="livePose" type="NormalizedLandmark[] | null">
+  Current live pose (from webcam). Used for overlay transformation calculations.
+</ParamField>
+
+## TypeScript Interface
+
+```typescript
+type NormalizedLandmark = {
+  x: number;        // 0-1 normalized horizontal position
+  y: number;        // 0-1 normalized vertical position
+  z: number;        // depth (negative = closer to camera)
+  visibility?: number; // 0-1 confidence score
+};
+
+type Props = {
+  onPose: (landmarks: NormalizedLandmark[] | null) => void;
+  segmentedVideoUrl?: string | null;
+  referenceVideoTime?: number;
+  playbackRate?: number;
+  isReferencePaused?: boolean;
+  referenceVideoAspectRatio?: number;
+  webcamCaptureRef?: React.MutableRefObject<(() => string | null) | null>;
+  webcamStreamRef?: React.MutableRefObject<MediaStream | null>;
+  onWebcamAspectRatio?: (aspectRatio: number) => void;
+  referencePose?: NormalizedLandmark[] | null;
+  livePose?: NormalizedLandmark[] | null;
+};
+```
+
+## Implementation Details
+
+### Pose Detection
+
+- Loads MediaPipe Pose model from CDN (`loadPose()` from `lib/pose.ts`)
+- Requests camera permission: `getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } })`
+- Processes frames via `requestAnimationFrame` loop
+- Draws skeleton overlay with neon cyan/magenta style:
+  ```typescript
+  const NEON_SKELETON_STYLE = {
+    mirror: true,
+    strokeColor: "#00ffff",
+    fillColor: "#ff00aa",
+    lineWidth: 3,
+    pointRadius: 5,
+    opacity: 1,
+    clear: true,
+  };
+  ```
+
+### Overlay Transformation
+
+When both `referencePose` and `livePose` are provided:
+
+1. **Calculate Bounds**: Extracts bounding box from torso + arms (landmarks 11-16, 23-24)
+2. **Compute Scale**: `scale = min(liveWidth/refWidth, liveHeight/refHeight) * 1.8`
+3. **Align Centers**: Translates overlay to align reference center with live center (accounting for mirror)
+4. **Transform Canvas**: Uses `ctx.translate()` and `ctx.scale()` to project overlay
+
+### Video Sync
+
+- Overlay video syncs to `referenceVideoTime` every frame
+- Drift threshold: **50ms** (re-seeks if `|overlayTime - refTime| > 0.05s`)
+- Mirrors play/pause state of reference video
+- Renders at 60fps via separate `requestAnimationFrame` loop
+
+## Example from page.tsx
+
+```tsx
+// app/page.tsx:1094-1106
+<CameraPanel
+  onPose={handlePose}
+  segmentedVideoUrl={segmentedVideoUrl}
+  referenceVideoTime={currentVideoTime}
+  playbackRate={playbackRate}
+  isReferencePaused={isVideoPaused}
+  referenceVideoAspectRatio={referenceVideoAspectRatio}
+  webcamCaptureRef={webcamCaptureRef}
+  webcamStreamRef={webcamStreamRef}
+  onWebcamAspectRatio={setWebcamAspectRatio}
+  referencePose={referencePoseRef.current}
+  livePose={livePoseRef.current}
+/>
+```
+
+## Styling
+
+- **Border**: Neon magenta glow (`border-neon-magenta/15`)
+- **HUD Corners**: Magenta corner brackets
+- **Panel Label**: "Your Move" (top-left, 8px uppercase)
+- **Live Indicator**: Animated red dot + "LIVE" badge (top-right)
+- **Video**: Horizontally mirrored (`transform: scaleX(-1)`)
+- **Canvases**: Absolute positioned overlays (skeleton + segmented outline)
+
+## Related Files
+
+- `app/lib/pose.ts` - MediaPipe Pose loader and skeleton drawing
+- `app/lib/outlineExtractor.ts` - Segmentation mask/outline extraction
+- `app/lib/frameCapture.ts` - Video frame capture utilities

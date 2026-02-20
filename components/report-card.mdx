@@ -1,0 +1,263 @@
+---
+title: 'ReportCard'
+description: 'Multi-slide performance summary with AI-generated feedback and stats visualization'
+---
+
+The `ReportCard` component displays a full-screen, multi-slide performance report after the user completes a video. It includes AI-generated feedback, grade assignment, limb breakdown, and actionable tips.
+
+## Features
+
+- **4-Slide Presentation**: Grade → Body Metrics → Vibe/Persona → Level Up
+- **AI-Generated Content**: OpenAI generates grade, persona, tips, and summary
+- **Mode-Specific Styling**: Different color palettes for dance vs gym modes
+- **Stats Visualization**: Score timeline graphs, limb radar charts, frame hit distribution
+- **Dot Navigation**: Click dots to jump between slides
+- **Tap to Advance**: Click anywhere to advance, ESC to close
+- **Recording Upload**: Optional webcam recording display with upload status
+
+## Usage
+
+```tsx
+import ReportCard from "./components/report/ReportCard";
+import type { AIReport } from "./components/report/types";
+import type { SessionStats } from "./lib/sessionStats";
+
+function App() {
+  const [showReport, setShowReport] = useState(false);
+  const [reportData, setReportData] = useState<AIReport | null>(null);
+  const [stats, setStats] = useState<SessionStats | null>(null);
+
+  return (
+    <>
+      {showReport && stats && (
+        <ReportCard
+          stats={stats}
+          report={reportData}
+          mode="dance"
+          videoTitle="Dua Lipa - Levitating"
+          loading={!reportData}
+          onClose={() => setShowReport(false)}
+          recordingUrl="https://storage.example.com/recording-abc123.webm"
+          recordingUploading={false}
+        />
+      )}
+    </>
+  );
+}
+```
+
+## Props
+
+<ParamField path="stats" type="SessionStats" required>
+  Session statistics object containing:
+  - `scoreTimeline: number[]` - Frame-by-frame score samples
+  - `limbScores: Record<string, { sum: number; count: number }>` - Limb performance totals
+  - `frameHits: Record<ScoreType, number>` - Count of Perfect/Great/OK/Almost/Miss frames
+  - `peakScore: number` - Highest score achieved
+  - `duration: number` - Session length in milliseconds
+</ParamField>
+
+<ParamField path="report" type="AIReport | null" required>
+  AI-generated report data. Null shows loading state.
+</ParamField>
+
+<ParamField path="mode" type="'dance' | 'gym'" required>
+  Application mode. Changes color palette:
+  - `"dance"` → Cyan/magenta/violet theme
+  - `"gym"` → Blue/orange/green theme
+</ParamField>
+
+<ParamField path="videoTitle" type="string" required>
+  Title of the video (from YouTube metadata or AI generation prompt). Displayed on first slide.
+</ParamField>
+
+<ParamField path="loading" type="boolean" required>
+  Whether AI report is still generating. Shows loading spinner and "Analyzing your moves..." message.
+</ParamField>
+
+<ParamField path="onClose" type="() => void" required>
+  Callback fired when user closes report (ESC key or after final slide).
+</ParamField>
+
+<ParamField path="recordingUrl" type="string">
+  Optional URL to uploaded webcam recording. Displayed on final slide.
+</ParamField>
+
+<ParamField path="recordingUploading" type="boolean">
+  Whether recording is currently uploading. Shows spinner instead of URL.
+</ParamField>
+
+## TypeScript Interfaces
+
+```typescript
+import type { SessionStats } from "../../lib/sessionStats";
+import type { AppMode } from "../../shared/mode";
+
+export type AIReport = {
+  grade: "S" | "A" | "B" | "C" | "D";
+  headline: string;       // e.g., "Rhythm Assassin"
+  persona: string;        // e.g., "The Precision Pro"
+  personaDesc: string;    // e.g., "You nail timing with robotic accuracy"
+  summary: string;        // Paragraph overview
+  tips: string[];         // 3-5 actionable tips
+  bestLimb: string;       // "rightArm", "leftLeg", etc.
+  worstLimb: string;      // Limb needing most improvement
+};
+
+export type ReportCardProps = {
+  stats: SessionStats;
+  report: AIReport | null;
+  mode: AppMode;
+  videoTitle: string;
+  loading: boolean;
+  onClose: () => void;
+  recordingUrl?: string;
+  recordingUploading?: boolean;
+};
+```
+
+## Slide Breakdown
+
+### Slide 1: Grade (SlideGrade.tsx)
+
+- **Large letter grade**: S/A/B/C/D with mode-specific neon glow
+- **Video title**: Displayed above grade
+- **Headline**: AI-generated catchy title (e.g., "Rhythm Assassin")
+- **Animated entrance**: Grade scales in with glow pulse
+
+### Slide 2: Body Metrics (SlideBody.tsx)
+
+- **Score timeline graph**: Line chart showing score over time
+- **Limb breakdown**: 5 horizontal bars (right arm, left arm, right leg, left leg, torso)
+- **Peak score badge**: Displays highest score achieved
+- **Color coding**: Green (80+), yellow (50-79), red (&lt;50)
+
+### Slide 3: Vibe (SlideVibe.tsx)
+
+- **Persona card**: AI-assigned personality (e.g., "The Precision Pro")
+- **Persona description**: 1-2 sentences about user's style
+- **AI summary**: Paragraph analyzing overall performance
+- **Frame hit distribution**: Donut chart showing Perfect/Great/OK/Almost/Miss breakdown
+
+### Slide 4: Level Up (SlideLevelUp.tsx)
+
+- **Tips list**: 3-5 actionable improvement suggestions
+- **Recording link**: If available, shows "View Your Recording" button
+- **Upload status**: Spinner if recording is still uploading
+- **Exit prompt**: "Tap anywhere to close" or shows close button
+
+## Example from page.tsx
+
+```tsx
+// app/page.tsx:1187-1201
+{showReport && reportStats && (
+  <ReportCard
+    stats={reportStats}
+    report={reportData}
+    mode={mode}
+    videoTitle={videoTitle}
+    loading={reportLoading}
+    recordingUrl={recordingUrl}
+    recordingUploading={recordingUploading}
+    onClose={() => {
+      setShowReport(false);
+      videoEndedRef.current = false;
+    }}
+  />
+)}
+
+// Triggered when video ends (page.tsx:513-583)
+const handleVideoEnded = useCallback(() => {
+  const elapsed = performance.now() - sessionStartRef.current;
+  const stats = getSessionStats(poseTimeline?.length ?? 0, elapsed);
+  setReportStats(stats);
+  setReportLoading(true);
+  setSummaryReady(true);
+
+  // Upload webcam recording
+  setRecordingUploading(true);
+  stopWebcamRecording()
+    .then(async (blob) => {
+      if (!blob) return;
+      const res = await fetch("/api/recording/upload", {
+        method: "POST",
+        body: blob,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRecordingUrl(data.url);
+      }
+    })
+    .finally(() => setRecordingUploading(false));
+
+  // Fetch AI report
+  fetch("/api/report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stats, mode, videoTitle }),
+  })
+    .then((res) => res.json())
+    .then((data) => setReportData(data as AIReport))
+    .finally(() => setReportLoading(false));
+}, [poseTimeline, mode, videoTitle]);
+```
+
+## Navigation
+
+### Dot Controls
+
+- **4 dots** at bottom center
+- **Active dot**: Full opacity, scale 1.3x, neon glow
+- **Inactive dots**: 20% opacity, scale 1.0
+- Click dot to jump to that slide
+
+### Keyboard Controls
+
+- **ESC**: Close report immediately
+- **Click anywhere**: Advance to next slide (or close on final slide)
+
+### Slide Sequence
+
+```typescript
+const advance = useCallback(() => {
+  if (slide >= TOTAL_SLIDES - 1) {
+    onClose();  // Close after final slide
+  } else {
+    setSlide((s) => s + 1);
+  }
+}, [slide, onClose]);
+```
+
+## Styling
+
+### Overlay
+
+- **Background**: Blurred backdrop with dark gradient
+- **Z-index**: 100 (above all other UI)
+- **Pointer events**: Click to advance
+
+### Mode-Specific Colors
+
+```typescript
+const dotColor = isGym ? "#a0d4ff" : "#00ffff";
+const dotGlow = isGym
+  ? "0 0 8px rgba(160,212,255,0.6), 0 0 20px rgba(160,212,255,0.3)"
+  : "0 0 8px rgba(0,255,255,0.6), 0 0 20px rgba(0,255,255,0.3)";
+```
+
+### Typography
+
+- **Headers**: Audiowide font, uppercase, wide letter-spacing
+- **Body**: Chakra Petch font
+- **Grade**: 120-200px size (responsive)
+
+## Related Files
+
+- `app/components/report/SlideGrade.tsx` - Grade display slide
+- `app/components/report/SlideBody.tsx` - Stats/limb breakdown slide
+- `app/components/report/SlideVibe.tsx` - Persona/summary slide
+- `app/components/report/SlideLevelUp.tsx` - Tips/recording slide
+- `app/components/report/types.ts` - TypeScript interfaces
+- `app/api/report/route.ts` - OpenAI report generation endpoint
+- `app/lib/sessionStats.ts` - Stats collection and aggregation
+- `app/lib/webcamRecorder.ts` - Webcam recording capture

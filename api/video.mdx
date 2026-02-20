@@ -1,0 +1,198 @@
+---
+title: "GET /api/video/[id]"
+description: "Serve downloaded videos with HTTP range request support"
+---
+
+Streams video files from local storage with full support for HTTP range requests, enabling video seeking and progressive playback.
+
+## Endpoint
+
+```
+GET /api/video/{id}
+```
+
+<ParamField path="id" type="string" required>
+  Video ID (YouTube video ID or generated video ID)
+  
+  Must match regex: `/^[a-zA-Z0-9_-]+$/`
+</ParamField>
+
+## Headers
+
+<ParamField header="Range" type="string">
+  HTTP range request header for partial content
+  
+  Format: `bytes={start}-{end}`
+  
+  Example: `bytes=0-1023` (first 1KB)
+  
+  Example: `bytes=1048576-` (from 1MB to end)
+</ParamField>
+
+## Response
+
+### Full File Response (No Range Header)
+
+**Status:** `200 OK`
+
+**Headers:**
+- `Content-Type`: `video/mp4`
+- `Content-Length`: File size in bytes
+- `Accept-Ranges`: `bytes`
+
+**Body:** Complete video file as a stream
+
+### Partial Content Response (With Range Header)
+
+**Status:** `206 Partial Content`
+
+**Headers:**
+- `Content-Type`: `video/mp4`
+- `Content-Range`: `bytes {start}-{end}/{total}`
+- `Content-Length`: Chunk size in bytes
+- `Accept-Ranges`: `bytes`
+
+**Body:** Requested byte range as a stream
+
+## Implementation Details
+
+### Range Request Parsing
+
+From app/api/video/[id]/route.ts:31-44:
+
+```typescript
+const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+if (!match) {
+  return new NextResponse("Invalid range", { status: 416 });
+}
+
+const start = parseInt(match[1], 10);
+const end = match[2] ? parseInt(match[2], 10) : fileSize - 1;
+
+if (start >= fileSize || end >= fileSize) {
+  return new NextResponse("Range not satisfiable", {
+    status: 416,
+    headers: { "Content-Range": `bytes */${fileSize}` },
+  });
+}
+```
+
+### Stream Management
+
+From app/api/video/[id]/route.ts:47-70:
+
+```typescript
+const fileHandle = await open(filePath, "r");
+const stream = fileHandle.createReadStream({ start, end });
+
+let cancelled = false;
+const webStream = new ReadableStream({
+  start(controller) {
+    stream.on("data", (chunk: string | Buffer) => {
+      if (!cancelled) controller.enqueue(chunk);
+    });
+    stream.on("end", () => {
+      if (!cancelled) controller.close();
+      fileHandle.close();
+    });
+    stream.on("error", (err) => {
+      if (!cancelled) controller.error(err);
+      fileHandle.close();
+    });
+  },
+  cancel() {
+    cancelled = true;
+    stream.destroy();
+    fileHandle.close();
+  },
+});
+```
+
+## Example Usage
+
+### HTML Video Element
+
+```html
+<video controls>
+  <source src="/api/video/dQw4w9WgXcQ" type="video/mp4">
+</video>
+```
+
+The browser automatically handles range requests for seeking.
+
+### Fetch with Range Header
+
+```typescript
+// Fetch first 1MB of video
+const response = await fetch('/api/video/dQw4w9WgXcQ', {
+  headers: {
+    'Range': 'bytes=0-1048575'
+  }
+});
+
+console.log(response.status); // 206
+console.log(response.headers.get('Content-Range')); 
+// "bytes 0-1048575/25165824"
+
+const chunk = await response.arrayBuffer();
+```
+
+### Fetch Full Video
+
+```typescript
+const response = await fetch('/api/video/dQw4w9WgXcQ');
+
+console.log(response.status); // 200
+console.log(response.headers.get('Content-Length')); 
+// "25165824"
+
+const blob = await response.blob();
+```
+
+## Error Responses
+
+### Invalid Video ID
+
+```json
+{
+  "error": "Invalid video ID"
+}
+```
+
+Status: `400 Bad Request`
+
+### Video Not Found
+
+```json
+{
+  "error": "Video not found"
+}
+```
+
+Status: `404 Not Found`
+
+Returned when the video file doesn't exist at `/tmp/jigglewiggle/{id}.mp4`.
+
+### Invalid Range
+
+Status: `416 Range Not Satisfiable`
+
+Headers: `Content-Range: bytes */{fileSize}`
+
+Returned when:
+- Range header format is invalid
+- Requested byte range exceeds file size
+
+## Browser Compatibility
+
+All modern browsers support range requests for `<video>` elements:
+- Enables instant seeking without buffering entire video
+- Allows playback to start before download completes
+- Reduces bandwidth for users who don't watch full videos
+
+## Performance Notes
+
+- Uses Node.js file streams for memory-efficient large file handling
+- Implements `cancelled` flag pattern to prevent `ERR_INVALID_STATE` on stream cancellation
+- File handles are properly closed in all code paths (success, error, cancel)
+- Videos served from `/tmp` for fast local disk access

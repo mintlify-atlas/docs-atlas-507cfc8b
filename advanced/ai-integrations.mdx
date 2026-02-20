@@ -1,0 +1,610 @@
+---
+title: AI Service Integrations
+description: Deep dive into OpenAI, Groq, Grok, and Perplexity integrations including prompts, model selection, and rate limiting strategies
+---
+
+## Overview
+
+Jiggle Wiggle integrates five AI services for different aspects of the experience:
+
+| Service | Use Case | Model | Latency |
+|---------|----------|-------|--------|
+| OpenAI | Coaching LLM + TTS | GPT-4o-mini, TTS-1-HD | 1-2s |
+| Groq | Vision scoring + classification | LLaMA-4 Scout 17B, LLaMA 3.1 8B | 2-3s |
+| xAI Grok | Video generation | grok-imagine-video | 2-5min |
+| Perplexity | AI generation research | Sonar Pro | 3-5s |
+| ElevenLabs | High-quality TTS | Turbo v2.5 | 0.5-1s |
+
+## OpenAI Integration
+
+### 1. AI Coach (GPT-4o-mini)
+
+**Endpoint:** `/api/coach`  
+**File:** `app/api/coach/route.ts`
+
+#### System Prompts
+
+**Dance Mode:**
+```typescript
+const DANCE_COACH_PROMPT = `You're a hype dance coach in the room with someone learning choreography in real-time. You'll get a JSON pose snapshot with context — reply with ONE spoken coaching line (max 15 words). This will be read aloud via TTS so write it exactly as spoken words.
+
+ABSOLUTE RULE — UNIQUENESS:
+- You'll see "recentCoachLines" — these are your LAST lines. DO NOT repeat, rephrase, or echo ANY of them. Each response must use completely different words and structure.
+- You'll see "requiredStyle" — you MUST use that specific coaching style for this response. This changes every call to keep you varied.
+- If you catch yourself about to say something similar to a recent line, STOP and think of something totally new.
+
+REACT TO CHANGES (not static values):
+- "delta" shows what CHANGED since last check — comment on the change itself
+- "milestone" marks a special moment — celebrate it if present
+- If no delta exists, find something NEW to talk about (breathing, rhythm, transitions, a specific body part you haven't mentioned)
+
+REFERENCE DATA (when present):
+- matchScore, limbScores, worstLimb, refPoseLabel — PRIORITIZE these over generic feedback
+
+PHASE AWARENESS (sessionSeconds):
+- 0-15s: warm-up energy
+- 15-45s: first corrections
+- 45-90s: deeper coaching (combos, flow, transitions)
+- 90-150s: refinement (polish, celebrate)
+- 150s+: endurance (fresh challenges, keep it interesting)
+
+SCORE & TREND:
+- score >= 80 + improving: celebrate specifically
+- score 50-79: encouragement + one fix
+- score < 40: urgent but fun
+- trend "improving": acknowledge growth
+- trend "declining": re-engage with energy
+
+Reply with ONLY the coaching line. No quotes, no JSON, no explanation.`;
+```
+
+**Gym Mode:**
+```typescript
+const GYM_COACH_PROMPT = `You're a personal trainer giving real-time form cues to someone following an exercise video. You'll get a JSON pose snapshot with context — reply with ONE spoken coaching line (max 15 words). This will be read aloud via TTS.
+
+ABSOLUTE RULE — UNIQUENESS:
+- You'll see "recentCoachLines" — DO NOT repeat, rephrase, or echo ANY of them. Each response must use completely different words and structure.
+- You'll see "requiredStyle" — you MUST use that specific coaching style for this response.
+- If no delta exists, find something NEW (breathing, tempo, range of motion, a body part you haven't mentioned).
+
+REACT TO CHANGES:
+- "delta" shows what CHANGED — comment on the change
+- "milestone" marks a special moment — celebrate it
+
+REFERENCE DATA (when present):
+- matchScore, limbScores, worstLimb — prioritize these over generic cues.
+
+PHASE AWARENESS (sessionSeconds):
+- 0-15s: warm-up — stance, form reminders
+- 15-45s: form corrections — specific, technical
+- 45-90s: deeper coaching — breathing, tempo
+- 90-150s: endurance — maintain under fatigue
+- 150s+: push & motivate — dig deep
+
+Reply with ONLY the coaching line. No quotes, no JSON.`;
+```
+
+#### Anti-Repetition Strategy
+
+**12 Rotating Coaching Styles:**
+```typescript
+const COACHING_STYLES = [
+  "Ask a question about their form",
+  "Give a direct command",
+  "React with excitement or surprise",
+  "Use a count or rhythm cue",
+  "Challenge them to hit a target",
+  "Use a metaphor or analogy",
+  "Be playfully funny",
+  "Pure hype energy",
+  "Give a very specific technical cue",
+  "Comment on their progress over time",
+  "Reference the music or beat",
+  "Encourage them like a friend"
+];
+```
+
+Each call uses the next style in rotation, forcing the LLM to vary its approach.
+
+**Fuzzy Duplicate Detection:**
+```typescript
+function tokenize(s: string): Set<string> {
+  return new Set(
+    s.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  let intersection = 0;
+  for (const w of a) if (b.has(w)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+function isTooSimilar(newMsg: string, existingLines: string[]): boolean {
+  const newTokens = tokenize(newMsg);
+  for (const line of existingLines) {
+    if (jaccardSimilarity(newTokens, tokenize(line)) > 0.6) return true;
+  }
+  return false;
+}
+```
+
+If similarity > 60%, message is suppressed.
+
+**Delta Tracking:**
+```typescript
+function buildDelta(summary: PoseSummary): Record<string, string> {
+  const delta: Record<string, string> = {};
+  
+  const scoreDiff = summary.score - prevScore;
+  if (Math.abs(scoreDiff) >= 3) {
+    delta.score = `${scoreDiff > 0 ? "+" : ""}${scoreDiff}`;
+  }
+  
+  if (summary.reference?.worstLimb !== prevWorstLimb && prevWorstLimb) {
+    delta.worstLimb = `changed from ${prevWorstLimb} to ${ref.worstLimb}`;
+  }
+  
+  const energyDiff = summary.body.motionEnergy - prevMotionEnergy;
+  if (Math.abs(energyDiff) > 0.02) {
+    delta.energy = energyDiff > 0 ? "moving more" : "moving less";
+  }
+  
+  return delta;
+}
+```
+
+**Milestone Detection:**
+```typescript
+function checkMilestones(summary: PoseSummary): string | null {
+  if (summary.score > peakScore && summary.score >= 60) {
+    const bucket = Math.floor(summary.score / 10) * 10;
+    if (!hitMilestones.has("peak_" + bucket)) {
+      return `New personal best: ${summary.score}!`;
+    }
+  }
+  
+  if (summary.score >= 80 && !hitMilestones.has("hit80")) {
+    return "First time hitting 80+!";
+  }
+  
+  if (prevScore < 40 && summary.score >= 70) {
+    return "Amazing comeback from a rough patch!";
+  }
+  
+  return null;
+}
+```
+
+#### API Configuration
+
+```typescript
+const completion = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [
+    { role: "system", content: systemPrompt },
+    ...history.slice(-16),  // Last 16 messages
+    { role: "user", content: enrichedSummary }
+  ],
+  max_tokens: 80,
+  temperature: 0.95,          // High creativity
+  presence_penalty: 0.6,      // Discourage repeating prior output
+  frequency_penalty: 0.4      // Discourage common phrases
+});
+```
+
+**Adaptive Interval:**
+```typescript
+function getAdaptiveInterval(): number {
+  if (trend === "declining" || score < 40) return 3500;  // More frequent when struggling
+  if (score >= 80) return 5500;                          // Less frequent when doing well
+  return 4500;                                           // Default
+}
+```
+
+#### TTS Integration
+
+**Primary: ElevenLabs Turbo v2.5**
+```typescript
+const voiceId = isGym 
+  ? "pNInz6obpgDQGcFmaJgB"  // Adam (deep, authoritative)
+  : "21m00Tcm4TlvDq8ikWAM"; // Rachel (bright, expressive)
+
+const ttsRes = await fetch(
+  `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+  {
+    method: "POST",
+    headers: {
+      "xi-api-key": elevenLabsKey,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg"
+    },
+    body: JSON.stringify({
+      text: message,
+      model_id: "eleven_turbo_v2_5",
+      voice_settings: {
+        stability: 0.4,
+        similarity_boost: 0.75,
+        style: 0.6,
+        use_speaker_boost: true
+      }
+    })
+  }
+);
+```
+
+**Fallback: OpenAI TTS-1-HD**
+```typescript
+const ttsRes = await openai.audio.speech.create({
+  model: "tts-1-hd",
+  voice: isGym ? "onyx" : "shimmer",
+  input: message,
+  response_format: "mp3",
+  speed: 1.15  // Slightly faster for energetic feel
+});
+```
+
+**Audio format:** Base64-encoded MP3
+
+### 2. Performance Report Generation
+
+**Endpoint:** `/api/report`  
+**Model:** GPT-4o-mini
+
+```typescript
+const systemPrompt = `You're generating a Spotify Wrapped-style performance report for a dance/fitness session. Respond with ONLY valid JSON.
+
+Given session stats, create:
+1. Headline (punchy, 3-7 words)
+2. Persona (quirky label, 2-4 words)
+3. Two specific roasts/callouts (funny, 10-15 words each)
+4. Two improvement tips (actionable, 10-15 words each)
+
+Tone scales to performance:
+- S/A grade (78+): hype, celebrate, playful brag
+- B grade (45-77): encouraging, constructive
+- C/D grade (<45): funny roast, but still supportive
+
+Format:
+{
+  "headline": "...",
+  "persona": "...",
+  "roasts": ["...", "..."],
+  "tips": ["...", "..."]
+}`;
+```
+
+**Grade Calculation:**
+```typescript
+const avgScore = totalPoints / hitCount;
+const grade = 
+  avgScore >= 78 ? "S" :
+  avgScore >= 62 ? "A" :
+  avgScore >= 45 ? "B" :
+  avgScore >= 30 ? "C" : "D";
+```
+
+## Groq Integration
+
+### 1. Vision Scoring (LLaMA-4 Scout 17B)
+
+**Endpoint:** `/api/score`  
+**File:** `app/api/score/route.ts`
+
+#### System Prompt
+
+```typescript
+const SYSTEM_PROMPT = `You are a dance pose comparison engine. You receive two images:
+1. A reference frame from a dance video
+2. A live webcam frame of a dancer trying to match the reference
+
+Compare the dancer's pose to the reference and respond with ONLY valid JSON (no markdown, no extra text):
+{
+  "score": <0-100 overall match>,
+  "bodyMatch": <0-100 how well the overall body position matches>,
+  "limbDetail": {
+    "leftArm": <0-100>,
+    "rightArm": <0-100>,
+    "leftLeg": <0-100>,
+    "rightLeg": <0-100>,
+    "torso": <0-100>
+  },
+  "feedback": "<one short sentence about what to fix>"
+}
+
+Score guidelines:
+- 90-100: Nearly identical pose
+- 70-89: Good match, minor limb differences
+- 50-69: Roughly right idea, some limbs off
+- 30-49: Partially matching, major differences
+- 0-29: Very different poses
+
+The webcam image may be non-mirrored. Focus on the spatial pose shape, not left/right labeling.`;
+```
+
+#### API Configuration
+
+```typescript
+const groq = new OpenAI({
+  apiKey: process.env.GROQ_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1"
+});
+
+const completion = await groq.chat.completions.create({
+  model: "meta-llama/llama-4-scout-17b-16e-instruct",
+  messages: [
+    { role: "system", content: SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Compare these two poses:" },
+        {
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,${referenceFrame}` }
+        },
+        {
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,${webcamFrame}` }
+        }
+      ]
+    }
+  ],
+  response_format: { type: "json_object" },
+  temperature: 0.3,  // Low temperature for consistent scoring
+  max_tokens: 150
+});
+```
+
+#### Client-Side Integration
+
+**File:** `app/lib/groqScoring.ts`
+
+```typescript
+export function startGroqScoring(
+  captureReference: () => string | null,
+  captureWebcam: () => string | null,
+  onScore: (result: GroqScoreResult) => void,
+  intervalMs: number = 3000
+): () => void
+```
+
+**Features:**
+- Captures both frames as JPEG base64
+- POSTs to `/api/score` every 3 seconds
+- EMA smoothing (alpha=0.25) on returned scores
+- Exponential backoff on errors (max 3, then double interval)
+- Reset to normal interval on success
+
+**EMA Smoothing:**
+```typescript
+if (smoothedScore === null) {
+  smoothedScore = rawScore;
+} else {
+  smoothedScore = EMA_ALPHA * rawScore + (1 - EMA_ALPHA) * smoothedScore;
+}
+```
+
+### 2. Video Classification (LLaMA 3.1 8B)
+
+**File:** `app/lib/classifyVideo.ts`
+
+```typescript
+export async function classifyVideo(
+  title: string,
+  description: string
+): Promise<"dance" | "gym"> {
+  const groq = new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: "https://api.groq.com/openai/v1"
+  });
+  
+  const completion = await groq.chat.completions.create({
+    model: "llama-3.1-8b-instant",
+    messages: [
+      {
+        role: "system",
+        content: "Given a YouTube video title and description, classify it as either 'fitness' or 'dance'. Reply with ONLY the word 'fitness' or 'dance'."
+      },
+      {
+        role: "user",
+        content: `Title: ${title}\n\nDescription: ${description.slice(0, 1000)}`
+      }
+    ],
+    max_tokens: 10,
+    temperature: 0
+  });
+  
+  const raw = completion.choices[0]?.message?.content ?? "";
+  
+  if (raw.toLowerCase().includes("fitness")) return "gym";
+  if (raw.toLowerCase().includes("dance")) return "dance";
+  return "dance"; // Default
+}
+```
+
+**Called during download:** Parallel with yt-dlp to minimize latency
+
+## xAI Grok Integration (Video Generation)
+
+**Endpoint:** `/api/generate`  
+**File:** `app/lib/grok.ts`
+
+### Generation Request
+
+```typescript
+export async function generateVideo(
+  prompt: string,
+  options: GenerateOptions = {}
+): Promise<string> {
+  const body = {
+    model: "grok-imagine-video",
+    prompt,
+    duration: options.duration ?? 15,
+    aspect_ratio: options.aspect_ratio ?? "16:9",
+    resolution: options.resolution ?? "480p"
+  };
+  
+  const res = await fetch("https://api.x.ai/v1/videos/generations", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.XAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  
+  const data = await res.json();
+  return data.request_id;
+}
+```
+
+### Polling for Completion
+
+```typescript
+export async function waitForVideo(
+  requestId: string,
+  onProgress?: (status: string) => void,
+  maxWaitMs = 600_000  // 10 minutes
+): Promise<string> {
+  const interval = 5_000;  // Poll every 5s
+  
+  while (Date.now() - start < maxWaitMs) {
+    const status = await pollVideoStatus(requestId);
+    
+    // Grok may omit `status` field when done
+    if (status.video?.url) {
+      return status.video.url;
+    }
+    
+    if (status.status === "expired") {
+      throw new Error("Video generation expired");
+    }
+    
+    onProgress?.("pending");
+    await new Promise(r => setTimeout(r, interval));
+  }
+  
+  throw new Error("Video generation timed out");
+}
+```
+
+### Download to Local Storage
+
+```typescript
+export async function downloadVideo(url: string, destPath: string): Promise<void> {
+  const res = await fetch(url);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  await writeFile(destPath, buffer);
+}
+```
+
+**Full pipeline timing:** ~2-5 minutes from prompt to playable MP4
+
+## Perplexity Integration (Research for AI Generation)
+
+**Endpoint:** `/api/generate`  
+**Model:** Sonar Pro
+
+```typescript
+const perplexity = new OpenAI({
+  apiKey: process.env.PERPLEXITY_API_KEY,
+  baseURL: "https://api.perplexity.ai"
+});
+
+const researchCompletion = await perplexity.chat.completions.create({
+  model: "sonar-pro",
+  messages: [
+    {
+      role: "system",
+      content: "You are a fitness research assistant. Provide detailed, actionable exercise information with specific movements, form cues, timing, and step-by-step instructions. Cite real sources."
+    },
+    {
+      role: "user",
+      content: `Find detailed exercise routines, step-by-step instructions, and movement descriptions for: ${prompt}. Include specific exercises, form cues, muscle groups targeted, and timing for each movement.`
+    }
+  ]
+});
+
+const researchData = researchCompletion.choices[0]?.message?.content?.trim() || "";
+```
+
+**Research is then fed to GPT-4o-mini for synthesis into a video description.**
+
+**Why Perplexity?**
+- Web-grounded responses with citations
+- Real-time search capabilities
+- Better than GPT for factual fitness information
+
+## Rate Limiting & Error Handling
+
+### Groq Vision Scoring
+
+```typescript
+const MAX_CONSECUTIVE_ERRORS = 3;
+let consecutiveErrors = 0;
+
+if (!res.ok) {
+  consecutiveErrors++;
+  if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+    clearInterval(timer);
+    currentInterval = Math.min(currentInterval * 2, 30000);  // Cap at 30s
+    timer = setInterval(tick, currentInterval);
+  }
+  return;
+}
+
+consecutiveErrors = 0;
+if (currentInterval !== intervalMs) {
+  // Reset to normal on success
+  clearInterval(timer);
+  currentInterval = intervalMs;
+  timer = setInterval(tick, currentInterval);
+}
+```
+
+### OpenAI Coach
+
+```typescript
+if (now - lastRequestTs < interval) return null;  // Time-based rate limit
+if (pendingRequest) return null;                  // Prevent concurrent calls
+if (isSpeechPlaying()) return null;               // Don't interrupt audio
+```
+
+### Grok Video Generation
+
+- Client-side polling every 5s (not rate-limited by API)
+- 10-minute timeout
+- No retry on failure (generation is idempotent)
+
+## Cost Optimization
+
+### Token Usage
+
+| Service | Avg Tokens/Call | Calls/Session | Cost Estimate |
+|---------|----------------|---------------|---------------|
+| GPT-4o-mini (coach) | ~150 | 10-20 | $0.0015-0.003 |
+| GPT-4o-mini (report) | ~300 | 1 | $0.0003 |
+| Groq (vision) | ~100 | 10-20 | $0 (free tier) |
+| Groq (classify) | ~20 | 1 | $0 (free tier) |
+| Grok (video gen) | N/A | 0-1 | $0.10-0.20 |
+| Perplexity (research) | ~500 | 0-1 | $0.005 |
+| ElevenLabs (TTS) | ~15 chars | 10-20 | $0.0003-0.0006 |
+
+**Total per session:** ~$0.0025-0.0055 (excluding video generation)
+
+### Optimization Strategies
+
+1. **Compact history format** — Store human-readable summaries instead of full JSON in coach history
+2. **Adaptive intervals** — Reduce call frequency when performing well
+3. **Groq for classification** — Free, fast alternative to GPT-4 for simple tasks
+4. **ElevenLabs priority** — Better audio at similar cost to OpenAI TTS
+5. **Lazy loading** — Video generation only on user request
+
+## Related Pages
+
+- [System Architecture](/advanced/architecture)
+- [Pose Detection Deep Dive](/advanced/pose-detection)
+- [Video Processing Pipeline](/advanced/video-processing)

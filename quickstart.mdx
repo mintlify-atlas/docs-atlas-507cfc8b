@@ -1,80 +1,155 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get Jiggle Wiggle running in 5 minutes and complete your first coaching session
 ---
 
-## Get started in three steps
+Get up and running with Jiggle Wiggle in under 5 minutes. This guide will walk you through installation, setup, and your first AI-powered dance or workout coaching session.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have the following installed:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<CardGroup cols={2}>
+  <Card title="Node.js 18+" icon="node-js">
+    Download from [nodejs.org](https://nodejs.org/)
+  </Card>
+  <Card title="yt-dlp" icon="download">
+    Install via `brew install yt-dlp` (macOS) or `pip install yt-dlp`
+  </Card>
+  <Card title="ffmpeg" icon="film">
+    Install via `brew install ffmpeg` (macOS) or download from [ffmpeg.org](https://ffmpeg.org/)
+  </Card>
+  <Card title="OpenAI API Key" icon="key">
+    Required for AI coaching. Get yours at [platform.openai.com](https://platform.openai.com/api-keys)
+  </Card>
+</CardGroup>
 
-### Step 2: Deploy your changes
+## Installation
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
+<Steps>
+  <Step title="Clone and install">
+    ```bash
+    git clone https://github.com/cindyzli/jigglewiggle.git
+    cd jigglewiggle
+    npm install
+    ```
+  </Step>
+
+  <Step title="Configure environment">
+    Create a `.env.local` file in the project root:
+
+    ```bash
+    OPENAI_API_KEY=sk-...
+    GROQ_API_KEY=gsk_...          # Optional: Groq vision scoring
+    XAI_API_KEY=xai-...           # Optional: Grok video generation
+    PERPLEXITY_API_KEY=...        # Optional: AI generate research
+    ```
+
+    <Warning>
+    The `OPENAI_API_KEY` is required for AI coaching and performance reports. The other keys are optional but enable additional features.
+    </Warning>
+  </Step>
+
+  <Step title="Start the development server">
+    ```bash
+    npm run dev
+    ```
+
+    Open [http://localhost:3000](http://localhost:3000) in your browser.
+  </Step>
+</Steps>
+
+## Your first coaching session
+
+<Steps>
+  <Step title="Paste a YouTube URL">
+    On the home page, paste a YouTube URL of a dance or workout video. Short clips (30-60 seconds) work best.
+
+    <Tip>
+    Try a popular TikTok dance tutorial or a simple workout video for your first session.
+    </Tip>
+  </Step>
+
+  <Step title="Allow camera access">
+    When prompted, grant webcam permissions. The app needs your camera for real-time pose detection.
+  </Step>
+
+  <Step title="Wait for processing">
+    The app will:
+    - Download the video (30-60 seconds)
+    - Classify it as dance or gym mode
+    - Extract poses from the reference video (~10 seconds)
+    - Apply person segmentation (optional, can be skipped)
+
+    You'll see progress indicators for each step.
+  </Step>
+
+  <Step title="Start moving!">
+    - Press play on the video
+    - Follow along with the moves
+    - Watch your score appear in real-time:
+      - **PERFECT** (90+): +25 points
+      - **GREAT** (80+): +20 points
+      - **OK** (60+): +15 points
+      - **ALMOST** (40+): +10 points
+      - **MISS** (&lt;40): 0 points
+  </Step>
+
+  <Step title="View your report">
+    When the video ends, you'll see a Spotify Wrapped-style performance report with:
+    - Letter grade (S/A/B/C/D)
+    - Per-limb breakdown
+    - AI-generated persona and feedback
+    - Improvement tips
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<Accordion title="yt-dlp not found">
+Make sure `yt-dlp` is installed and on your PATH. Test with:
+
+```bash
+yt-dlp --version
+```
+
+If not installed:
+- **macOS**: `brew install yt-dlp`
+- **Windows**: `pip install yt-dlp`
+- **Linux**: `pip install yt-dlp` or `sudo apt install yt-dlp`
 </Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Accordion title="Camera not working">
+1. Check browser permissions (look for camera icon in address bar)
+2. Ensure no other application is using your webcam
+3. Try using HTTPS if testing remotely (camera access requires secure context)
+</Accordion>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Accordion title="OpenAI API key error">
+1. Verify your API key is correct in `.env.local`
+2. Check you have credits on your OpenAI account
+3. Restart the dev server after adding the API key
+</Accordion>
 
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
+<Accordion title="Video download fails">
+1. Verify the YouTube URL is valid and public
+2. Check your internet connection
+3. Some videos may be region-locked or age-gated
 </Accordion>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Explore features" icon="sparkles" href="/features/overview">
+    Learn about scoring, AI coaching, gesture controls, and more
+  </Card>
+  <Card title="Chrome extension" icon="puzzle-piece" href="/integrations/chrome-extension">
+    Install the browser extension for quick YouTube imports
+  </Card>
+  <Card title="Zoom app" icon="video" href="/integrations/zoom-app">
+    Use Jiggle Wiggle during Zoom meetings
+  </Card>
+  <Card title="Improve your scores" icon="chart-line" href="/guides/improving-scores">
+    Tips for getting better grades and performance
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

@@ -1,0 +1,496 @@
+---
+title: AI Coaching System
+description: OpenAI-powered LLM coach with personality-driven feedback, anti-repetition features, and real-time text-to-speech audio responses
+---
+
+## Overview
+
+Jiggle Wiggle's AI coach is an OpenAI GPT-4o-mini powered assistant that monitors your performance in real-time and provides contextual audio feedback. The system is designed to feel like a personal trainer who remembers your progress and adjusts their coaching style dynamically.
+
+<Info>
+  The coach uses **12 rotating coaching styles** and **fuzzy duplicate detection** to ensure every piece of feedback is unique and engaging.
+</Info>
+
+## Architecture
+
+```mermaid
+graph LR
+    A[Pose Summary] --> B[Delta Tracking]
+    B --> C[Milestone Detection]
+    C --> D[Style Selection]
+    D --> E[/api/coach]
+    E --> F[OpenAI GPT-4o-mini]
+    F --> G[Text Response]
+    F --> H[TTS Audio]
+    G --> I[Fuzzy Duplicate Check]
+    I --> J[Display Feedback]
+    H --> J
+```
+
+## Adaptive Interval System
+
+The coach adjusts how frequently it speaks based on your performance:
+
+```typescript Adaptive Timing (coach.ts:64)
+function getAdaptiveInterval(): number {
+  if (lastSummaryTrend === "declining" || lastSummaryScore < 40) {
+    return 3500; // 3.5s - More frequent help when struggling
+  }
+  if (lastSummaryScore >= 80) {
+    return 5500; // 5.5s - Less intrusive when doing well
+  }
+  return 4500; // 4.5s - Default interval
+}
+```
+
+<Tip>
+  The coach speaks **more frequently when you're struggling** (every 3.5s) and **backs off when you're doing well** (every 5.5s) to avoid interrupting your flow.
+</Tip>
+
+## Anti-Repetition System
+
+The coach uses multiple strategies to avoid repeating itself:
+
+### 1. Rotating Coaching Styles
+
+12 different coaching approaches are cycled through:
+
+```typescript Coaching Styles (coach.ts:46)
+const COACHING_STYLES = [
+  "Ask a question about their form",
+  "Give a direct command",
+  "React with excitement or surprise",
+  "Use a count or rhythm cue",
+  "Challenge them to hit a target",
+  "Use a metaphor or analogy",
+  "Be playfully funny",
+  "Pure hype energy",
+  "Give a very specific technical cue",
+  "Comment on their progress over time",
+  "Reference the music or beat",
+  "Encourage them like a friend",
+] as const;
+
+let styleIndex = 0;
+
+// Pick next style (rotate)
+const currentStyle = COACHING_STYLES[styleIndex % COACHING_STYLES.length];
+styleIndex++;
+```
+
+<Note>
+  The selected style is sent to the LLM as a `requiredStyle` field, forcing it to vary its approach each time.
+</Note>
+
+### 2. Fuzzy Duplicate Detection
+
+Jaccard similarity on tokenized words prevents semantically similar responses:
+
+```typescript Jaccard Similarity (coach.ts:72)
+function tokenize(s: string): Set<string> {
+  return new Set(
+    s.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, "")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
+}
+
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let intersection = 0;
+  for (const w of a) if (b.has(w)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+function isTooSimilar(newMsg: string, existingLines: string[]): boolean {
+  const newTokens = tokenize(newMsg);
+  for (const line of existingLines) {
+    if (jaccardSimilarity(newTokens, tokenize(line)) > 0.6) {
+      return true; // Too similar, reject it
+    }
+  }
+  return false;
+}
+```
+
+<CodeGroup>
+```typescript Example: Similar Messages Blocked
+// Recent coach lines:
+const recent = [
+  "Keep your arms up!",
+  "Nice energy, but watch your form"
+];
+
+// New message:
+const newMsg = "Keep those arms up!";
+
+// Similarity check:
+jaccardSimilarity(
+  new Set(["keep", "those", "arms", "up"]),
+  new Set(["keep", "your", "arms", "up"])
+) = 0.75 // > 0.6 threshold → BLOCKED
+```
+
+```typescript Example: Different Message Allowed
+const newMsg = "Try bending your knees more";
+
+jaccardSimilarity(
+  new Set(["try", "bending", "your", "knees", "more"]),
+  new Set(["keep", "your", "arms", "up"])
+) = 0.14 // < 0.6 → ALLOWED
+```
+</CodeGroup>
+
+### 3. Recent Lines Tracking
+
+Last 10 coach messages are sent to the LLM as a "DO NOT SAY" list:
+
+```typescript Recent Lines (coach.ts:24)
+const recentCoachLines: string[] = [];
+const MAX_RECENT_LINES = 10;
+
+// Send to LLM:
+const enrichedSummary = {
+  ...summary,
+  recentCoachLines: recentCoachLines.length > 0 ? recentCoachLines : undefined,
+  // ...
+};
+```
+
+## Delta Tracking
+
+The coach is informed about **what changed** since the last feedback:
+
+```typescript Delta Calculation (coach.ts:95)
+function buildDelta(summary: PoseSummary): Record<string, string> {
+  const delta: Record<string, string> = {};
+  
+  // Score change
+  const scoreDiff = summary.score - prevScore;
+  if (Math.abs(scoreDiff) >= 3) {
+    delta.score = `${scoreDiff > 0 ? "+" : ""}${scoreDiff} (was ${prevScore}, now ${summary.score})`;
+  }
+
+  // Worst limb changed
+  if (ref && ref.worstLimb !== prevWorstLimb && prevWorstLimb) {
+    delta.worstLimb = `changed from ${prevWorstLimb} to ${ref.worstLimb}`;
+  }
+
+  // Motion energy change
+  const energyDiff = summary.body.motionEnergy - prevMotionEnergy;
+  if (Math.abs(energyDiff) > 0.02) {
+    delta.energy = energyDiff > 0 ? "moving more" : "moving less";
+  }
+
+  // Arm height change
+  const armDiff = summary.body.armHeight - prevArmHeight;
+  if (Math.abs(armDiff) > 0.05) {
+    delta.armHeight = armDiff < 0 ? "arms higher" : "arms lower";
+  }
+
+  return delta;
+}
+```
+
+<Tip>
+  Delta tracking allows the coach to say things like "Nice! Your right arm improved!" instead of just "Your right arm is weak."
+</Tip>
+
+## Milestone Detection
+
+Special moments trigger celebratory feedback:
+
+```typescript Milestone Tracking (coach.ts:128)
+function checkMilestones(summary: PoseSummary): string | null {
+  const milestones: string[] = [];
+
+  // New personal best
+  if (summary.score > peakScore && summary.score >= 60) {
+    peakScore = summary.score;
+    const bucket = Math.floor(summary.score / 10) * 10;
+    if (!hitMilestones.has("peak_" + bucket)) {
+      hitMilestones.add("peak_" + bucket);
+      milestones.push(`New personal best: ${summary.score}!`);
+    }
+  }
+
+  // First time hitting 80+
+  if (summary.score >= 80 && !hitMilestones.has("hit80")) {
+    hitMilestones.add("hit80");
+    milestones.push("First time hitting 80+!");
+  }
+
+  // Comeback from struggle
+  if (prevScore < 40 && summary.score >= 70 && !hitMilestones.has("comeback")) {
+    hitMilestones.add("comeback");
+    milestones.push("Amazing comeback from a rough patch!");
+  }
+
+  // Time milestones
+  const mins = Math.floor(summary.sessionSeconds / 60);
+  if (mins >= 3 && !hitMilestones.has("3min")) {
+    hitMilestones.add("3min");
+    milestones.push("Three minutes of practice!");
+  }
+
+  return milestones.length > 0 ? milestones[0] : null;
+}
+```
+
+<CardGroup cols={2}>
+  <Card title="Personal Best" icon="trophy">
+    Detected when you reach a new score bucket (60, 70, 80, 90)
+  </Card>
+  
+  <Card title="Threshold Unlock" icon="star">
+    First time hitting 80+ or 90+ triggers special celebration
+  </Card>
+  
+  <Card title="Comeback" icon="fire">
+    Jumping from &lt;40 to 70+ gets recognized
+  </Card>
+  
+  <Card title="Time Milestones" icon="clock">
+    1, 3, and 5 minute marks acknowledged
+  </Card>
+</CardGroup>
+
+## Compact Summary for History
+
+Instead of sending full JSON to the LLM (which makes all entries look similar), a compact human-readable format is stored:
+
+```typescript Compact Format (coach.ts:181)
+function compactSummary(summary: PoseSummary, delta: Record<string, string>): string {
+  const parts: string[] = [];
+  parts.push(`Score ${summary.score} (${summary.trend})`);
+
+  if (summary.reference) {
+    parts.push(`match ${summary.reference.matchScore}, worst: ${summary.reference.worstLimb}`);
+  }
+
+  const deltaEntries = Object.entries(delta);
+  if (deltaEntries.length > 0) {
+    parts.push("Changes: " + deltaEntries.map(([k, v]) => `${k}=${v}`).join(", "));
+  }
+
+  parts.push(`${summary.sessionSeconds}s in`);
+  return parts.join(" | ");
+}
+
+// Example output:
+// "Score 75 (improving) | match 72, worst: rightArm | Changes: score=+8 (was 67, now 75) | 23s in"
+```
+
+<Note>
+  Compact summaries reduce token usage and prevent the LLM from parroting raw metrics.
+</Note>
+
+## OpenAI Integration
+
+The coaching endpoint sends enriched summaries to GPT-4o-mini:
+
+```typescript API Call (coach.ts:236)
+const enrichedSummary = {
+  ...summary,
+  delta: Object.keys(delta).length > 0 ? delta : undefined,
+  milestone: milestone || undefined,
+  recentCoachLines: recentCoachLines.length > 0 ? recentCoachLines : undefined,
+  requiredStyle: currentStyle,
+  coachCallNumber: coachCallCount,
+};
+
+const res = await fetch("/api/coach", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    summary: enrichedSummary,
+    history: conversationHistory.slice(-MAX_HISTORY),
+    mode, // "dance" or "gym"
+  }),
+});
+
+const data = await res.json();
+const message: string = data.message; // Text feedback
+const audio: string | undefined = data.audio; // Base64 TTS audio
+```
+
+### System Prompt (Dance Mode)
+
+```
+You are a dance coach watching someone perform in real-time.
+Personality: Hype, supportive, playful, rhythmic.
+
+Respond in 1 short sentence (max 12 words).
+
+Current required style: ${requiredStyle}
+
+DO NOT repeat these recent lines:
+${recentCoachLines.join("\n")}
+
+If there's a milestone, celebrate it: ${milestone}
+```
+
+### System Prompt (Gym Mode)
+
+```
+You are a fitness coach watching someone work out in real-time.
+Personality: Motivating, direct, focused on form.
+
+Respond in 1 short sentence (max 12 words).
+
+Current required style: ${requiredStyle}
+
+DO NOT repeat these recent lines:
+${recentCoachLines.join("\n")}
+
+If there's a milestone, celebrate it: ${milestone}
+```
+
+## Text-to-Speech
+
+Coach messages are converted to audio using OpenAI's TTS API:
+
+<CodeGroup>
+```typescript Server-Side TTS (/api/coach/route.ts)
+const ttsResponse = await fetch("https://api.openai.com/v1/audio/speech", {
+  method: "POST",
+  headers: {
+    "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    model: "tts-1",
+    voice: mode === "gym" ? "onyx" : "nova", // Deeper voice for gym
+    input: message,
+    speed: 1.1, // Slightly faster for energy
+  }),
+});
+
+const audioBuffer = await ttsResponse.arrayBuffer();
+const base64Audio = Buffer.from(audioBuffer).toString("base64");
+
+return { message, audio: base64Audio };
+```
+
+```typescript Client-Side Playback
+if (result.audio) {
+  const audioBlob = base64ToBlob(result.audio, "audio/mpeg");
+  const audioUrl = URL.createObjectURL(audioBlob);
+  const audio = new Audio(audioUrl);
+  audio.play();
+}
+```
+</CodeGroup>
+
+<Tip>
+  **Voice Selection**
+  - Dance mode: `nova` (energetic, friendly)
+  - Gym mode: `onyx` (deeper, authoritative)
+</Tip>
+
+## Conversation History
+
+Last 16 messages are kept for context:
+
+```typescript History Management (coach.ts:271)
+conversationHistory.push({
+  role: "user",
+  content: compactSummary(summary, delta),
+});
+conversationHistory.push({
+  role: "assistant",
+  content: message,
+});
+
+while (conversationHistory.length > MAX_HISTORY * 2) {
+  conversationHistory.shift();
+}
+```
+
+## Example Coaching Flow
+
+<Steps>
+  <Step title="Initial Feedback">
+    ```
+    User: Score 45 (steady) | 5s in
+    Coach: [Style: Direct command] Keep those arms up, let's go!
+    ```
+  </Step>
+  
+  <Step title="Improvement Detected">
+    ```
+    User: Score 72 (improving) | Changes: score=+27, armHeight=arms higher | 12s in
+    Coach: [Style: React with excitement] Yes! Much better arm form!
+    ```
+  </Step>
+  
+  <Step title="Milestone Celebration">
+    ```
+    User: Score 81 (improving) | First time hitting 80+! | 18s in
+    Coach: [Style: Pure hype energy] EIGHTY! YOU'RE ON FIRE!
+    ```
+  </Step>
+  
+  <Step title="Specific Technical Cue">
+    ```
+    User: Score 78 (steady) | match 75, worst: rightLeg | 25s in
+    Coach: [Style: Technical cue] Bend that right knee a bit more.
+    ```
+  </Step>
+</Steps>
+
+## Reset State
+
+When starting a new video:
+
+```typescript Reset Function (coach.ts:300)
+export function resetCoach(): void {
+  conversationHistory.length = 0;
+  recentCoachLines.length = 0;
+  lastRequestTs = 0;
+  lastMessage = "";
+  lastSummaryScore = 50;
+  lastSummaryTrend = "steady";
+  prevScore = 50;
+  prevWorstLimb = "";
+  peakScore = 0;
+  hitMilestones = new Set();
+  coachCallCount = 0;
+  styleIndex = 0;
+}
+```
+
+## Debugging Coach Issues
+
+<AccordionGroup>
+  <Accordion title="Coach Not Speaking">
+    - Check if `isSpeechPlaying()` is returning true (cooldown)
+    - Verify interval hasn't elapsed (3.5-5.5s depending on score)
+    - Check browser console for API errors
+  </Accordion>
+  
+  <Accordion title="Repetitive Feedback">
+    - Confirm `recentCoachLines` is being tracked
+    - Lower Jaccard similarity threshold from 0.6 to 0.5
+    - Add more coaching styles to the rotation
+  </Accordion>
+  
+  <Accordion title="Audio Not Playing">
+    - Ensure `OPENAI_API_KEY` is set in `.env.local`
+    - Check TTS API rate limits
+    - Verify audio blob decoding in browser
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Scoring System" icon="chart-line" href="/features/scoring-system">
+    Learn how pose summaries are generated for the coach
+  </Card>
+  
+  <Card title="Performance Reports" icon="file-lines" href="/features/performance-reports">
+    See how the coach's observations feed into final report generation
+  </Card>
+</CardGroup>

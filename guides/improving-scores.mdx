@@ -1,0 +1,329 @@
+---
+title: "Improving Your Scores"
+description: "Tips and strategies for improving your match scores, achieving higher grades, and getting PERFECT hits consistently"
+---
+
+# Improving Your Scores
+
+Jiggle Wiggle scores every move in real-time, giving you instant feedback and a final grade at the end. This guide explains how scoring works and how to improve your performance to earn those satisfying PERFECT hits and top-tier grades.
+
+## Understanding the Scoring System
+
+### How Scores Are Calculated
+
+Your score is computed using three weighted signals blended together:
+
+| Signal | Weight | What It Measures |
+|--------|--------|------------------|
+| **Geometric pose comparison** | 50-80% | Compares your landmark positions against reference frames using angle and distance matching per limb |
+| **Groq vision scoring** | 40% | Periodic screenshot comparison between reference video and your webcam, scored by AI vision |
+| **Heuristic body metrics** | 10-20% | Arm height, body symmetry, motion energy, torso angle, and other form factors |
+
+<Note>
+Scores are EMA-smoothed with alpha 0.15 and a 2-point dead zone to reduce jitter and make your score feel stable.
+</Note>
+
+### Score Tiers and Points
+
+When you hit a key pose in the video, you'll see a popup with:
+
+| Tier | Score Required | Points Awarded |
+|------|----------------|----------------|
+| **PERFECT** | 90+ | +25 points |
+| **GREAT** | 80-89 | +20 points |
+| **OK** | 60-79 | +15 points |
+| **ALMOST** | 40-59 | +10 points |
+| **MISS** | Under 40 | 0 points |
+
+<Tip>
+Every 5th consecutive non-MISS hit triggers a gold streak celebration! Build combos to maximize your points and excitement.
+</Tip>
+
+## Final Grade Breakdown
+
+At the end of your session, you'll receive a letter grade based on your average score:
+
+| Grade | Average Score Required | Meaning |
+|-------|------------------------|----------|
+| **S** | 78+ | Outstanding! The AI coach hypes you up |
+| **A** | 62-77 | Great performance with solid technique |
+| **B** | 45-61 | Good effort, room for improvement |
+| **C** | 30-44 | Needs work, coach gives constructive feedback |
+| **D** | Under 30 | Coach provides motivational roasts and tips |
+
+<Note>
+Your grade comes with a Spotify Wrapped-style performance report featuring your headline, AI persona, per-limb breakdown, and personalized improvement tips.
+</Note>
+
+## Key Factors That Affect Your Score
+
+### 1. Pose Confidence (Baseline)
+
+Your score starts at 70, then adjusts based on performance:
+
+**Visibility penalty**:
+- Average landmark visibility below 50% → **-15 points**
+- Caused by: poor lighting, going off-frame, or occlusion
+
+<Tip>
+Maintain good lighting and stay fully in frame. This is the foundation of high scores.
+</Tip>
+
+### 2. Arm Position and Height
+
+**Arm height scoring**:
+- Wrists **below shoulders** by more than 15% of frame height → **-10 points**
+- The AI prioritizes arm movements as key choreography signals
+
+**Arm symmetry**:
+- Wrists **uneven** by more than 18% of frame height → **-8 points**
+- Many dance moves require balanced arm positions
+
+<Tip>
+Raise your arms high and keep them level! Arm movements are heavily weighted in the scoring algorithm.
+</Tip>
+
+### 3. Motion Energy
+
+The system tracks your keypoint velocity over 3-frame windows:
+
+**Too still**:
+- Average displacement < 0.008 → **-12 points**
+- "Not moving enough" feedback from coach
+
+**Too chaotic**:
+- Average displacement > 0.12 → **-8 points**
+- "Moving too chaotically" feedback from coach
+
+**Just right**:
+- Smooth, purposeful movement → **+10 points**
+
+<Note>
+The sweet spot is controlled, energetic movement. Dance with intention, not random motion.
+</Note>
+
+### 4. Body Metrics
+
+Additional factors tracked in your pose summary:
+
+- **Torso lean**: Horizontal offset between shoulders and hips
+- **Knee bend**: Relative position of knees to hips
+- **Body symmetry**: Left/right limb positioning
+
+These metrics feed into the AI coach's feedback and influence your overall score.
+
+## Strategies for Higher Scores
+
+### Start With the Basics
+
+<AccordionGroup>
+  <Accordion title="1. Perfect Your Setup">
+    Before focusing on choreography:
+    - Ensure excellent lighting (no "Low pose confidence" warnings)
+    - Position yourself at the right distance (full body in frame)
+    - Choose a clean background
+    - Test your skeleton overlay (all joints visible)
+    
+    See [Pose Detection Tips](/guides/pose-detection-tips) for detailed setup guidance.
+  </Accordion>
+
+  <Accordion title="2. Choose the Right Video">
+    For learning and high scores:
+    - Start with slower, clearer choreography
+    - Choose videos with distinct arm movements
+    - Pick 30-60 second clips for focused practice
+    - Use mirrored tutorial videos
+    
+    See [Using YouTube Videos](/guides/using-youtube-videos) for selection tips.
+  </Accordion>
+
+  <Accordion title="3. Master Playback Controls">
+    Use the video player tools:
+    - Slow down to **0.5x speed** while learning
+    - Set A/B loop markers to repeat difficult sections
+    - Jump back 10 seconds to retry moves
+    - Use gesture controls (raise both hands) to pause without breaking flow
+  </Accordion>
+</AccordionGroup>
+
+### Movement Technique
+
+#### Arm Movements
+**Arms are crucial** for high scores:
+
+✅ **Do**:
+- Raise arms to at least shoulder height
+- Keep arm movements symmetric when choreography requires it
+- Extend arms fully for dramatic gestures
+- Hold positions briefly to register the pose
+
+❌ **Avoid**:
+- Lazy arm placement below shoulders
+- One arm higher than the other without intention
+- Half-extended arms (commit to the movement!)
+- Rushing through arm transitions
+
+#### Motion Quality
+**Move with purpose**:
+
+✅ **Do**:
+- Match the energy level of the reference video
+- Execute smooth, controlled movements
+- Hit key poses clearly before transitioning
+- Maintain consistent movement throughout
+
+❌ **Avoid**:
+- Standing still or barely moving
+- Flailing wildly without matching the choreo
+- Skipping key poses in the sequence
+- Inconsistent energy (starting strong, fading out)
+
+<Tip>
+Watch the move queue timeline at the bottom to anticipate upcoming poses. Being ready for each transition improves your timing and scores.
+</Tip>
+
+#### Body Position
+**Stay visible and aligned**:
+
+✅ **Do**:
+- Keep your full body in frame at all times
+- Face the camera directly
+- Maintain upright torso posture
+- Execute low moves (squats) within camera view
+
+❌ **Avoid**:
+- Turning completely sideways
+- Leaning so far the torso leaves frame
+- Going too low and cutting off at the knees
+- Drifting left/right out of center
+
+## Working With the AI Coach
+
+### Understanding Coaching Feedback
+
+The AI coach watches your pose summary every few seconds and gives personality-driven audio feedback:
+
+**Common coach callouts**:
+- "Arms too low" → Raise your arms above shoulder height
+- "Not moving enough" → Increase your motion energy
+- "Arms uneven" → Balance your left and right arm positions
+- "Low pose confidence" → Check your lighting or stay in frame
+
+<Note>
+The coach has personality modes that scale with performance. S/A grades get hype and encouragement, C/D grades get motivational roasts and specific improvement tips.
+</Note>
+
+### Using Feedback to Improve
+
+1. **Listen during practice**: The coach provides real-time guidance
+2. **Adjust immediately**: Fix issues as soon as they're called out
+3. **Read your report card**: Review the 4-slide performance summary
+4. **Focus on worst limb**: The report shows per-limb breakdown
+5. **Replay hard sections**: Use the "Replay hardest part" button
+
+<Tip>
+The AI coach maintains conversation history (last 6 exchanges) and throttles to one call per 3 seconds. It learns your patterns and gives contextual advice.
+</Tip>
+
+## Advanced Scoring Tactics
+
+### Building Combo Streaks
+
+**Streak mechanics**:
+- Every **non-MISS** hit counts toward your streak (ALMOST and up)
+- Every **5th consecutive hit** triggers a gold streak celebration
+- Streaks reset on MISS scores
+
+**Strategy for long streaks**:
+1. Start with simpler sections to build momentum
+2. Use slower playback speed (0.75x) to reduce errors
+3. Focus on consistency over perfection initially
+4. Gradually increase speed as you master the routine
+
+### Maximizing Points
+
+**Point optimization**:
+- **PERFECT hits (90+)** give maximum points (+25)
+- Even a score of 89 is GREAT (+20), a 5-point difference
+- Focus on the high-impact factors: arms up, good energy, stay in frame
+
+**Priority for points**:
+1. Fix "Low pose confidence" issues first (biggest penalty: -15)
+2. Raise your arms (second biggest penalty: -10)
+3. Increase motion energy if too still (penalty: -12)
+4. Balance arm symmetry if needed (penalty: -8)
+
+<Tip>
+Going from GREAT (80) to PERFECT (90) requires only 10 more points. Often this is just "arms higher" + "slightly more energy."
+</Tip>
+
+### Targeting S-Rank (78+ Average)
+
+To consistently hit S-rank:
+
+- **Setup perfectly**: Zero lighting/framing penalties
+- **Arms always high**: Eliminate the -10 arm height penalty
+- **Smooth, energetic movement**: Get the +10 motion bonus
+- **Match key poses precisely**: High geometric comparison score
+- **Practice repeatedly**: Familiarity improves timing and positioning
+
+## Using the Performance Report
+
+After each session, you get a detailed report card:
+
+### What's Included
+
+**Slide 1 - Overview**:
+- Total points accumulated
+- Final letter grade
+- Longest combo streak
+- Session duration
+
+**Slide 2 - Per-Limb Breakdown**:
+- Individual scores for arms, legs, torso
+- Worst-performing limb highlighted
+- Visual breakdown of strengths
+
+**Slide 3 - AI Persona & Tone**:
+- Personality-driven headline
+- Performance-scaled commentary
+- Motivational or celebratory message
+
+**Slide 4 - Improvement Tips**:
+- 2 strengths identified
+- 2 specific areas to improve
+- Actionable advice for your next session
+
+<Tip>
+Use the "Replay hardest part" button to immediately practice your lowest-scoring segment with A/B loop markers set automatically.
+</Tip>
+
+## Practice Progression
+
+### Week 1: Foundations
+- Focus on setup and visibility
+- Practice simple choreo at 0.5x speed
+- Target consistent GREAT hits (80+)
+- Goal: B grade or better
+
+### Week 2: Technique
+- Master arm height and symmetry
+- Match motion energy to video
+- Practice at 0.75x speed
+- Goal: A grade (62+)
+
+### Week 3: Precision
+- Hit PERFECT scores consistently
+- Build 5+ combo streaks
+- Practice at full speed (1x)
+- Goal: S grade (78+)
+
+### Week 4: Mastery
+- Tackle complex choreography
+- Maintain S grades on multiple videos
+- Try faster videos or harder moves
+- Goal: Consistent PERFECT hits and long combos
+
+<Note>
+Remember: The scoring system prioritizes **arm height, motion energy, and visibility** above all. Master these three factors and your grades will soar!
+</Note>

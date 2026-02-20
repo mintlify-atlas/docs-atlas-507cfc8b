@@ -1,0 +1,179 @@
+---
+title: 'CoachPanel'
+description: 'AI coaching feedback display with score-reactive styling and TTS audio controls'
+---
+
+The `CoachPanel` component displays real-time AI coaching messages with dynamic color styling that reacts to the user's performance score. It includes a mute toggle for TTS audio playback.
+
+## Features
+
+- **Dynamic Color Styling**: Border, glow, and intensity react to score (green ≥80, yellow ≥50, red &lt;50)
+- **AI Coaching Messages**: Displays text feedback from OpenAI API
+- **TTS Audio Playback**: Plays OpenAI TTS audio responses
+- **Mute Toggle**: Persistent mute state with speaker icon
+- **Mode-Aware UI**: Different labels for gym ("Form Coach") vs dance ("AI Coach") modes
+- **Smooth Transitions**: 0.6s ease transitions for color changes
+
+## Usage
+
+```tsx
+import CoachPanel from "./components/CoachPanel";
+
+function App() {
+  const [score, setScore] = useState(0);
+  const [coachMessage, setCoachMessage] = useState("");
+
+  return (
+    <CoachPanel
+      score={score}
+      message={coachMessage}
+      showScore={true}
+      mode="dance"
+    />
+  );
+}
+```
+
+## Props
+
+<ParamField path="score" type="number" required>
+  Current performance score (0-100). Determines border color, glow intensity, and visual feedback.
+</ParamField>
+
+<ParamField path="message" type="string" required>
+  AI coaching message text. Displays in Chakra Petch font, truncates if too long.
+</ParamField>
+
+<ParamField path="showScore" type="boolean">
+  Whether to show score-reactive styling. Set to false before pose timeline is available.
+</ParamField>
+
+<ParamField path="mode" type="'dance' | 'gym'" default="'dance'">
+  Application mode. Changes panel label:
+  - `"gym"` → "Form Coach" + "Ready to check your form. Let's work."
+  - `"dance"` → "AI Coach" + "Step into the arena. Show me what you've got."
+</ParamField>
+
+## TypeScript Interface
+
+```typescript
+type AppMode = "dance" | "gym";
+
+type Props = {
+  score: number;
+  message: string;
+  showScore?: boolean;
+  mode?: AppMode;
+};
+```
+
+## Color Mapping
+
+Score-to-color mapping (RGB values with smooth transitions):
+
+```typescript
+function scoreToColor(score: number): { r: number; g: number; b: number } {
+  if (score >= 80) return { r: 57, g: 255, b: 20 };   // Green (#39ff14)
+  if (score >= 50) return { r: 255, g: 225, b: 0 };   // Yellow (#ffe100)
+  return { r: 255, g: 0, b: 60 };                      // Red (#ff003c)
+}
+```
+
+Glow intensity (box-shadow opacity multiplier):
+- Score ≥80: `1.0` (full intensity)
+- Score ≥50: `0.7` (medium)
+- Score &lt;50: `0.4` (low)
+
+## Example from page.tsx
+
+```tsx
+// app/page.tsx:1153
+<CoachPanel
+  score={score}
+  message={coachMsg}
+  showScore={poseTimeline !== null}
+  mode={mode}
+/>
+```
+
+## TTS Audio Integration
+
+The mute toggle controls playback of OpenAI TTS audio:
+
+```tsx
+// From app/lib/speech.ts
+import { isMuted, setMuted } from "../shared/speech";
+
+const [muted, _setMuted] = useState(isMuted());
+const toggleMute = () => {
+  const next = !muted;
+  setMuted(next);
+  _setMuted(next);
+};
+```
+
+Audio is played automatically via `speak(audioBlob)` when coach messages arrive (unless muted).
+
+## Styling Details
+
+### Layout
+
+- **Container**: Flexbox row with 20px gap, 20px horizontal padding, 12px vertical padding
+- **Background**: Semi-transparent black (`bg-black/50`)
+- **Border**: 1px solid, color reacts to score via inline `rgba(r, g, b, alpha)` style
+- **Corners**: Cyan HUD brackets (4x4px, 2px border width)
+
+### Typography
+
+- **Label**: 11px, 0.25em letter-spacing, uppercase, violet color, Audiowide font
+- **Message**: 16px, medium weight, white/90% opacity, Chakra Petch font, truncated
+
+### Mute Button
+
+- **Size**: 36x36px square
+- **Border**: Cyan 15% opacity, increases to 30% on hover
+- **Icons**: Two SVG states (muted = X over speaker, unmuted = sound waves)
+
+### Transitions
+
+```css
+transition: border-color 0.6s ease, box-shadow 0.6s ease;
+```
+
+## Implementation Notes
+
+### Score Label Bounce Animation
+
+The label ("PERFECT", "FIRE", "GOOD", "MOVE") has a bounce animation when it changes:
+
+```typescript
+function scoreToLabel(score: number): string {
+  if (score >= 90) return "PERFECT";
+  if (score >= 80) return "FIRE";
+  if (score >= 60) return "GOOD";
+  if (score >= 40) return "MOVE";
+  return "";
+}
+
+// Triggers 400ms bounce animation on label change
+useEffect(() => {
+  if (label && label !== prevLabelRef.current) {
+    setLabelBounce(true);
+    const t = setTimeout(() => setLabelBounce(false), 400);
+    return () => clearTimeout(t);
+  }
+}, [label]);
+```
+
+### Default Messages
+
+When `message` prop is empty, displays mode-specific defaults:
+- **Gym**: "Ready to check your form. Let's work."
+- **Dance**: "Step into the arena. Show me what you've got."
+
+## Related Files
+
+- `app/lib/coach.ts` - AI coaching logic with OpenAI API integration
+- `app/lib/speech.ts` - TTS audio playback and mute state management
+- `app/shared/speech.ts` - Shared mute state (localStorage-persisted)
+- `app/api/coach/route.ts` - Server endpoint for OpenAI chat completion + TTS

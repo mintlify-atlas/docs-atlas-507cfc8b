@@ -1,0 +1,260 @@
+---
+title: "POST /api/coach"
+description: "Generate real-time AI coaching feedback with text-to-speech"
+---
+
+Generates personalized coaching feedback using OpenAI GPT-4o-mini based on pose analysis, with optional text-to-speech audio via ElevenLabs or OpenAI TTS.
+
+## Endpoint
+
+```
+POST /api/coach
+```
+
+## Request Body
+
+<ParamField body="summary" type="object" required>
+  Current pose snapshot with context from `buildPoseSummary()`
+  
+  <Expandable title="properties">
+    <ResponseField name="matchScore" type="number">
+      Overall pose match score (0-100)
+    </ResponseField>
+    <ResponseField name="limbScores" type="object">
+      Individual limb scores: `{ rightArm, leftArm, rightLeg, leftLeg, torso }`
+    </ResponseField>
+    <ResponseField name="worstLimb" type="string">
+      Limb with lowest score
+    </ResponseField>
+    <ResponseField name="delta" type="string">
+      What changed since last check
+    </ResponseField>
+    <ResponseField name="milestone" type="string">
+      Special moment to celebrate (if any)
+    </ResponseField>
+    <ResponseField name="sessionSeconds" type="number">
+      Seconds elapsed in session
+    </ResponseField>
+    <ResponseField name="trend" type="string">
+      `"improving"`, `"declining"`, or `"stable"`
+    </ResponseField>
+    <ResponseField name="recentCoachLines" type="array">
+      Last 3-5 coaching lines to avoid repetition
+    </ResponseField>
+    <ResponseField name="requiredStyle" type="string">
+      Coaching style to use (e.g., "energetic", "technical", "encouraging")
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="history" type="array">
+  Conversation history (last 16 messages)
+  
+  Array of `{ role: "user" | "assistant", content: string }`
+</ParamField>
+
+<ParamField body="mode" type="string">
+  App mode: `"dance"` or `"gym"`
+  
+  Determines coaching personality and voice
+</ParamField>
+
+## Response
+
+<ResponseField name="message" type="string">
+  Coaching text (max 15 words, spoken-style)
+  
+  Example: `"YES! That's the energy! Keep those arms high!"`
+</ResponseField>
+
+<ResponseField name="audio" type="string">
+  Base64-encoded MP3 audio (optional, if TTS configured)
+  
+  Play with: `new Audio('data:audio/mp3;base64,' + audio).play()`
+</ResponseField>
+
+## Coaching Prompts
+
+### Dance Coach Prompt
+
+From app/api/coach/route.ts:5-34:
+
+```typescript
+const DANCE_COACH_PROMPT = `You're a hype dance coach in the room with someone learning choreography in real-time. You'll get a JSON pose snapshot with context — reply with ONE spoken coaching line (max 15 words). This will be read aloud via TTS so write it exactly as spoken words.
+
+ABSOLUTE RULE — UNIQUENESS:
+- You'll see "recentCoachLines" — these are your LAST lines. DO NOT repeat, rephrase, or echo ANY of them. Each response must use completely different words and structure.
+- You'll see "requiredStyle" — you MUST use that specific coaching style for this response. This changes every call to keep you varied.
+- If you catch yourself about to say something similar to a recent line, STOP and think of something totally new.
+
+REACT TO CHANGES (not static values):
+- "delta" shows what CHANGED since last check — comment on the change itself
+- "milestone" marks a special moment — celebrate it if present
+- If no delta exists, find something NEW to talk about (breathing, rhythm, transitions, a specific body part you haven't mentioned)
+
+REFERENCE DATA (when present):
+- matchScore, limbScores, worstLimb, refPoseLabel — PRIORITIZE these over generic feedback
+
+PHASE AWARENESS (sessionSeconds):
+- 0-15s: warm-up energy
+- 15-45s: first corrections
+- 45-90s: deeper coaching (combos, flow, transitions)
+- 90-150s: refinement (polish, celebrate)
+- 150s+: endurance (fresh challenges, keep it interesting)
+
+SCORE & TREND:
+- score >= 80 + improving: celebrate specifically
+- score 50-79: encouragement + one fix
+- score < 40: urgent but fun
+- trend "improving": acknowledge growth
+- trend "declining": re-engage with energy
+
+Reply with ONLY the coaching line. No quotes, no JSON, no explanation.`;
+```
+
+### Gym Coach Prompt
+
+Similar structure but focused on form cues, breathing, tempo, and endurance for gym/fitness mode.
+
+## OpenAI Configuration
+
+From app/api/coach/route.ts:106-113:
+
+```typescript
+const completion = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages,
+  max_tokens: 80,
+  temperature: 0.95,
+  presence_penalty: 0.6,  // Discourage repeating tokens
+  frequency_penalty: 0.4, // Discourage repeating phrases
+});
+```
+
+## Text-to-Speech
+
+### ElevenLabs TTS (Primary)
+
+Requires `ELEVENLABS_API_KEY` environment variable.
+
+**Voices:**
+- Dance mode: Rachel (`21m00Tcm4TlvDq8ikWAM`) — bright & expressive
+- Gym mode: Adam (`pNInz6obpgDQGcFmaJgB`) — deep & authoritative
+
+**Settings:**
+```json
+{
+  "model_id": "eleven_turbo_v2_5",
+  "voice_settings": {
+    "stability": 0.4,
+    "similarity_boost": 0.75,
+    "style": 0.6,
+    "use_speaker_boost": true
+  }
+}
+```
+
+### OpenAI TTS (Fallback)
+
+Used if no ElevenLabs key configured.
+
+**Voices:**
+- Dance mode: `shimmer`
+- Gym mode: `onyx`
+
+**Settings:**
+```typescript
+{
+  model: "tts-1-hd",
+  response_format: "mp3",
+  speed: 1.15
+}
+```
+
+## Example Request
+
+```typescript
+const response = await fetch('/api/coach', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    summary: {
+      matchScore: 72,
+      limbScores: { rightArm: 85, leftArm: 60, rightLeg: 75, leftLeg: 70, torso: 80 },
+      worstLimb: 'leftArm',
+      delta: 'left arm dropped 15 points',
+      sessionSeconds: 45,
+      trend: 'declining',
+      recentCoachLines: ['Nice job!', 'Keep it up!', "You're doing great!"],
+      requiredStyle: 'urgent'
+    },
+    history: [
+      { role: 'user', content: 'First pose...' },
+      { role: 'assistant', content: "Let's go! Get those arms up!" }
+    ],
+    mode: 'dance'
+  })
+});
+
+const { message, audio } = await response.json();
+
+console.log(message); // "Whoa! Left arm needs to match the right!"
+
+if (audio) {
+  const audioElement = new Audio(`data:audio/mp3;base64,${audio}`);
+  audioElement.play();
+}
+```
+
+## Response Examples
+
+### With Audio (TTS Configured)
+
+```json
+{
+  "message": "Left arm higher! Match that right side energy!",
+  "audio": "//NExAAR...base64...=="
+}
+```
+
+### Text Only (No TTS Key)
+
+```json
+{
+  "message": "Keep moving!"
+}
+```
+
+Note: When `OPENAI_API_KEY` is missing, returns a default message:
+
+```json
+{
+  "message": "Set OPENAI_API_KEY in .env.local to enable AI coach!"
+}
+```
+
+## Error Handling
+
+The endpoint is designed to never fail hard. On any error:
+
+```json
+{
+  "message": "Keep going! You've got this!"
+}
+```
+
+Status: `200 OK` (fallback response)
+
+## Rate Limiting
+
+Client-side throttling recommended:
+- Default: 1 call per 3 seconds
+- Implemented in `app/lib/coach.ts`
+- Prevents API overuse and maintains conversation quality
+
+## Integration Notes
+
+- Coach maintains conversation history (last 6 exchanges) for context
+- Uses `presence_penalty` and `frequency_penalty` to reduce repetition
+- Coaching style varies based on session phase and performance trend
+- Audio auto-plays on client for real-time feedback during workout/dance

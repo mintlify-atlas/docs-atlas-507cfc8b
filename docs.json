@@ -1,122 +1,122 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Jiggle Wiggle",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#FF3B8F",
+    "light": "#FFD700",
+    "dark": "#9333EA"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/cindyzli/jigglewiggle"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/cindyzli/jigglewiggle"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Features",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "features/overview",
+              "features/scoring-system",
+              "features/ai-coaching",
+              "features/gesture-controls",
+              "features/video-generation",
+              "features/performance-reports"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Integrations",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "integrations/chrome-extension",
+              "integrations/zoom-app"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Guides",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "guides/using-youtube-videos",
+              "guides/pose-detection-tips",
+              "guides/improving-scores"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "API Endpoints",
             "pages": [
-              "api-reference/introduction"
+              "api/download",
+              "api/video",
+              "api/coach",
+              "api/report",
+              "api/score",
+              "api/segment",
+              "api/generate"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Components",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "components/camera-panel",
+              "components/youtube-panel",
+              "components/coach-panel",
+              "components/score-popup",
+              "components/report-card"
+            ]
+          },
+          {
+            "group": "Libraries",
+            "pages": [
+              "libraries/pose",
+              "libraries/scoring",
+              "libraries/pose-comparison",
+              "libraries/video-pose-extractor"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Technical Details",
+            "pages": [
+              "advanced/architecture",
+              "advanced/pose-detection",
+              "advanced/ai-integrations",
+              "advanced/video-processing"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "advanced/deployment",
+              "advanced/environment-variables",
+              "advanced/troubleshooting"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

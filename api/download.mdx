@@ -1,0 +1,194 @@
+---
+title: "POST /api/download"
+description: "Download YouTube videos with Server-Sent Events streaming"
+---
+
+Downloads a YouTube video using `yt-dlp` and streams real-time progress updates, completion status, and video classification via Server-Sent Events (SSE).
+
+## Endpoint
+
+```
+POST /api/download
+```
+
+## Request Body
+
+<ParamField body="videoId" type="string" required>
+  YouTube video ID (11-character alphanumeric string with dashes/underscores)
+  
+  Example: `dQw4w9WgXcQ`
+</ParamField>
+
+## Response Format
+
+Returns a Server-Sent Events (SSE) stream with `Content-Type: text/event-stream`.
+
+### Event Types
+
+<ResponseField name="progress" type="object">
+  Download progress update
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"progress"`
+    </ResponseField>
+    <ResponseField name="percent" type="number">
+      Download completion percentage (0-100)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="done" type="object">
+  Download completed successfully
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"done"`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="classified" type="object">
+  Video classification result (dance vs. gym)
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"classified"`
+    </ResponseField>
+    <ResponseField name="mode" type="string">
+      Detected mode: `"dance"` or `"gym"`
+    </ResponseField>
+    <ResponseField name="title" type="string">
+      Video title from metadata
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="error" type="object">
+  Download or classification error
+  
+  <Expandable title="properties">
+    <ResponseField name="type" type="string">
+      Always `"error"`
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      Error description
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Behavior
+
+### Caching
+
+Videos are cached at `/tmp/jigglewiggle/{videoId}.mp4`. If a video is already downloaded:
+- Immediately emits `progress` at 100%
+- Emits `done`
+- Still runs classification to emit `classified` event
+
+### Video Classification
+
+Runs in parallel with download using `yt-dlp --dump-json` to fetch metadata. The `classifyVideo()` function analyzes title and description to determine mode.
+
+### Download Options
+
+From app/api/download/route.ts:90-95:
+
+```typescript
+const proc = spawn("yt-dlp", [
+  "-f", "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio/best",
+  "--merge-output-format", "mp4",
+  "-o", outputPath,
+  "--newline",
+  url,
+]);
+```
+
+## Example Request
+
+```typescript
+const response = await fetch('/api/download', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ videoId: 'dQw4w9WgXcQ' })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+let buffer = '';
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  
+  buffer += decoder.decode(value, { stream: true });
+  const lines = buffer.split('\n\n');
+  buffer = lines.pop() || '';
+  
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const event = JSON.parse(line.slice(6));
+      
+      if (event.type === 'progress') {
+        console.log(`Download: ${event.percent}%`);
+      } else if (event.type === 'done') {
+        console.log('Download complete!');
+      } else if (event.type === 'classified') {
+        console.log(`Mode: ${event.mode}, Title: ${event.title}`);
+      } else if (event.type === 'error') {
+        console.error('Error:', event.message);
+      }
+    }
+  }
+}
+```
+
+## Example SSE Stream
+
+```
+data: {"type":"progress","percent":12.5}
+
+data: {"type":"progress","percent":45.2}
+
+data: {"type":"progress","percent":78.9}
+
+data: {"type":"progress","percent":100}
+
+data: {"type":"done"}
+
+data: {"type":"classified","mode":"dance","title":"Hip Hop Dance Tutorial"}
+
+```
+
+## Error Responses
+
+### Invalid Video ID
+
+```json
+{
+  "error": "Invalid video ID"
+}
+```
+
+Status: `400 Bad Request`
+
+Video ID must match regex: `/^[a-zA-Z0-9_-]{11}$/`
+
+### Download Failure
+
+Emitted as SSE event:
+
+```json
+{
+  "type": "error",
+  "message": "yt-dlp exited with code 1"
+}
+```
+
+## Implementation Notes
+
+- Downloads run in child processes via Node.js `spawn()`
+- Progress is parsed from yt-dlp stdout using regex: `/\[download\]\s+([\d.]+)%/`
+- Classification runs concurrently with download to minimize latency
+- Cache hits skip download but still perform fast classification
+- Output directory created automatically with `mkdir(VIDEO_DIR, { recursive: true })`

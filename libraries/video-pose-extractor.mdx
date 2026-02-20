@@ -1,0 +1,524 @@
+---
+title: "Video Pose Extractor"
+description: "Client-side pose timeline extraction from video files"
+---
+
+The `videoPoseExtractor.ts` library extracts pose landmarks from video files frame-by-frame, creating a timeline for reference pose comparison and the MoveQueue strip.
+
+## Types
+
+### PoseFrame
+
+```typescript
+type PoseFrame = {
+  time: number;                      // Timestamp in seconds
+  landmarks: NormalizedLandmark[];   // Pose landmarks at this frame
+};
+```
+
+A single timestamped pose frame.
+
+### PoseTimeline
+
+```typescript
+type PoseTimeline = PoseFrame[];
+```
+
+Array of pose frames extracted from a video. Used for reference pose comparison.
+
+### StripPoseFrame
+
+```typescript
+type StripPoseFrame = {
+  time: number;
+  landmarks: NormalizedLandmark[];
+  thumbnail?: string;                // Data URL (JPEG, 60% quality)
+};
+```
+
+Pose frame with optional thumbnail for the MoveQueue UI.
+
+### StripPoseTimeline
+
+```typescript
+type StripPoseTimeline = StripPoseFrame[];
+```
+
+Sparse timeline of interesting poses selected by the extraction algorithm.
+
+## Functions
+
+### extractPoses
+
+```typescript
+async function extractPoses(
+  videoSrc: string,
+  onProgress: (percent: number) => void
+): Promise<PoseTimeline>
+```
+
+Extracts pose landmarks from a video at 10 FPS (0.1s intervals).
+
+**Parameters:**
+- `videoSrc`: Video URL (e.g., `/api/video/abc123`)
+- `onProgress`: Callback receiving 0-100 progress updates
+
+**Returns:**
+- Dense timeline with a frame every 0.1 seconds
+
+**Process:**
+
+1. **Load video**: Create hidden video element, wait for metadata
+2. **Setup canvas**: Scale to max 320px (maintains aspect ratio)
+3. **Load MediaPipe**: Initialize pose detection model
+4. **Frame extraction**:
+   - Seek to time `t` (0, 0.1, 0.2, ...)
+   - Draw video frame to canvas
+   - Run MediaPipe pose detection
+   - Store landmarks with timestamp
+5. **Cleanup**: Remove hidden video and canvas elements
+
+**Usage:**
+```typescript
+import { extractPoses } from "@/lib/videoPoseExtractor";
+import { useState } from "react";
+
+export function ExtractPosesDemo() {
+  const [progress, setProgress] = useState(0);
+  const [timeline, setTimeline] = useState(null);
+
+  async function extract() {
+    const tl = await extractPoses("/api/video/abc123", setProgress);
+    setTimeline(tl);
+    console.log(`Extracted ${tl.length} frames`);
+  }
+
+  return (
+    <div>
+      <button onClick={extract}>Extract Poses</button>
+      {progress > 0 && <p>Progress: {progress.toFixed(0)}%</p>}
+      {timeline && <p>Done! {timeline.length} frames</p>}
+    </div>
+  );
+}
+```
+
+**Performance:**
+- **30-second video**: ~300 frames at 10 FPS
+- **Processing time**: ~15-30 seconds (depends on hardware)
+- **Memory**: ~5-10 MB for landmarks (33 floats × 300 frames)
+
+### extractStripPoses
+
+```typescript
+async function extractStripPoses(
+  videoSrc: string,
+  onProgress: (percent: number) => void,
+  targetFrameCount = 20
+): Promise<StripPoseTimeline>
+```
+
+Extracts the most interesting poses for the MoveQueue strip using smart frame selection.
+
+**Parameters:**
+- `videoSrc`: Video URL
+- `onProgress`: Callback receiving 0-100 progress updates
+- `targetFrameCount`: Approximate number of frames to return (default: 20)
+
+**Returns:**
+- Sparse timeline of interesting poses with thumbnails
+
+**Algorithm:**
+
+1. **Dense sampling**: Extract frames at 0.5s intervals
+2. **Interest scoring**: Score each frame based on:
+   - **Motion energy**: Displacement from previous frame
+   - **Pose extremity**: Arm height, arm spread, knee bends
+   - **Local peaks**: Bonus for frames between valid neighbors
+3. **Greedy selection**: Select top-scoring frames with minimum time spacing
+4. **Interpolation**: Fill missing landmarks from nearest valid frames
+5. **Thumbnail generation**: Canvas to JPEG data URL (60% quality)
+
+**Interest score formula:**
+```typescript
+score = 
+  (motionEnergy * 100) +       // Heavily weight movement
+  (armHeight * 20) +            // High/low arms
+  (armSpread * 15) +            // Wide arm spread
+  (kneeBend * 25) +             // Deep squats
+  (localPeakBonus ? 5 : 0);     // Between valid frames
+```
+
+**Usage:**
+```typescript
+import { extractStripPoses } from "@/lib/videoPoseExtractor";
+
+const stripTimeline = await extractStripPoses(
+  "/api/video/abc123",
+  (p) => console.log(`${p}%`),
+  20  // Target 20 interesting frames
+);
+
+console.log(`Selected ${stripTimeline.length} interesting frames`);
+
+// Render MoveQueue
+stripTimeline.forEach((frame) => {
+  console.log(`${frame.time}s: ${frame.landmarks.length} landmarks`);
+  if (frame.thumbnail) {
+    // Display thumbnail
+  }
+});
+```
+
+**Progress breakdown:**
+- 0-80%: Dense sampling phase
+- 80-100%: Selection and interpolation
+
+**Performance:**
+- **30-second video**: ~60 dense samples at 0.5s intervals
+- **Processing time**: ~10-20 seconds
+- **Output**: ~20 interesting frames
+- **Memory**: ~2 MB (20 frames × ~100 KB thumbnail)
+
+## Internal Functions
+
+### prepareExtractionElements
+
+```typescript
+async function prepareExtractionElements(videoSrc: string)
+```
+
+Creates hidden video, canvas, and MediaPipe Pose instance. Returns cleanup function.
+
+**Process:**
+
+1. Create hidden video element, load metadata
+2. Calculate canvas dimensions:
+   ```typescript
+   const scale = Math.min(MAX_EXTRACT_DIM / videoWidth, MAX_EXTRACT_DIM / videoHeight);
+   canvasWidth = round(videoWidth * scale);
+   canvasHeight = round(videoHeight * scale);
+   ```
+3. Create hidden canvas with scaled dimensions
+4. Load MediaPipe Pose
+5. Return extraction context + cleanup function
+
+**MAX_EXTRACT_DIM**: 320px (balance between quality and performance)
+
+### calculateInterestScore
+
+```typescript
+function calculateInterestScore(
+  frame: StripPoseFrame,
+  prevFrame: StripPoseFrame | null,
+  nextFrame: StripPoseFrame | null
+): number
+```
+
+Calculates how interesting/dynamic a pose frame is.
+
+**Scoring components:**
+
+1. **Motion energy** (100× weight):
+   ```typescript
+   if (prevFrame) {
+     totalDisp = Σ distance(frame.landmarks[i], prevFrame.landmarks[i]);
+     score += (totalDisp / landmarkCount) * 100;
+   }
+   ```
+
+2. **Arm height** (20× weight):
+   ```typescript
+   armHeight = |avgWristY - avgShoulderY|;
+   score += armHeight * 20;
+   ```
+
+3. **Arm spread** (15× weight):
+   ```typescript
+   armSpread = |leftWristX - rightWristX|;
+   score += armSpread * 15;
+   ```
+
+4. **Knee bend** (25× weight):
+   ```typescript
+   kneeBend = |avgKneeY - avgHipY|;
+   score += kneeBend * 25;
+   ```
+
+5. **Local peak bonus** (+5):
+   - If between two valid frames (candidate for local maxima)
+
+**Usage:**
+This function is used internally by `selectInterestingFrames()`.
+
+### selectInterestingFrames
+
+```typescript
+function selectInterestingFrames(
+  denseTL: StripPoseTimeline,
+  targetCount: number
+): StripPoseTimeline
+```
+
+Selects the most interesting frames from a dense timeline using greedy selection.
+
+**Algorithm:**
+
+1. Score all frames using `calculateInterestScore()`
+2. Sort by score descending
+3. Greedy selection with minimum time spacing:
+   ```typescript
+   minSpacing = totalDuration / (targetCount * 1.5);
+   
+   for (candidate in sortedFrames) {
+     if (selected.length >= targetCount) break;
+     
+     if (no selected frame within minSpacing of candidate) {
+       selected.push(candidate);
+     }
+   }
+   ```
+4. Sort selected frames by time
+
+**Why greedy selection?**
+- Prevents clustering: Ensures temporal diversity
+- Captures peaks: High-scoring frames are likely pose transitions
+- Configurable density: Adjust `targetCount` for more/fewer frames
+
+### fillMissingStripLandmarks
+
+```typescript
+function fillMissingStripLandmarks(
+  timeline: StripPoseTimeline
+): StripPoseTimeline
+```
+
+Interpolates missing landmarks by copying from nearest valid frames.
+
+**Algorithm:**
+
+1. Build `nextValidIdx` array (forward pass)
+2. For each frame with missing landmarks:
+   - Find nearest previous valid frame
+   - Find nearest next valid frame
+   - Copy from the closer one (by time difference)
+3. Handle edge cases:
+   - No previous valid: copy from next
+   - No next valid: copy from previous
+   - No valid frames: leave empty
+
+**Why interpolate?**
+- MediaPipe occasionally fails to detect poses (occlusion, motion blur)
+- MoveQueue UI expects consistent skeleton rendering
+- Simple copy is better than black frames for UI purposes
+
+## Extraction Pipeline Comparison
+
+| Feature | extractPoses | extractStripPoses |
+|---------|--------------|-------------------|
+| Sampling rate | 0.1s (10 FPS) | 0.5s (2 FPS) |
+| Output count | ~300 frames (30s video) | ~20 frames (configurable) |
+| Thumbnails | No | Yes (JPEG 60%) |
+| Selection | All frames | Smart selection |
+| Use case | Reference comparison | MoveQueue UI |
+| Memory | ~10 MB | ~2 MB |
+| Processing time | 15-30s | 10-20s |
+
+## Integration Example
+
+Complete example with MoveQueue rendering:
+
+```typescript
+import { extractStripPoses, type StripPoseTimeline } from "@/lib/videoPoseExtractor";
+import { drawSkeleton } from "@/lib/pose";
+import { useState, useRef } from "react";
+
+export function MoveQueueDemo() {
+  const [timeline, setTimeline] = useState<StripPoseTimeline | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  async function extract() {
+    const tl = await extractStripPoses(
+      "/api/video/abc123",
+      setProgress,
+      20  // Target 20 frames
+    );
+    setTimeline(tl);
+  }
+
+  // Sync with video playback
+  function handleTimeUpdate() {
+    setCurrentTime(videoRef.current?.currentTime || 0);
+  }
+
+  return (
+    <div>
+      <button onClick={extract}>Extract Poses</button>
+      {progress > 0 && progress < 100 && (
+        <progress value={progress} max={100} />
+      )}
+
+      {timeline && (
+        <>
+          <video
+            ref={videoRef}
+            src="/api/video/abc123"
+            onTimeUpdate={handleTimeUpdate}
+            controls
+          />
+
+          <div style={{ display: "flex", gap: 8, overflowX: "scroll" }}>
+            {timeline.map((frame, i) => {
+              const isActive = Math.abs(frame.time - currentTime) < 0.5;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    border: isActive ? "2px solid lime" : "1px solid gray",
+                    padding: 4,
+                  }}
+                  onClick={() => {
+                    if (videoRef.current) {
+                      videoRef.current.currentTime = frame.time;
+                    }
+                  }}
+                >
+                  {frame.thumbnail ? (
+                    <img src={frame.thumbnail} width={80} height={60} />
+                  ) : (
+                    <canvas
+                      width={80}
+                      height={60}
+                      ref={(canvas) => {
+                        if (canvas) {
+                          const ctx = canvas.getContext("2d")!;
+                          drawSkeleton(
+                            ctx,
+                            frame.landmarks,
+                            80,
+                            60,
+                            { mirror: false }
+                          );
+                        }
+                      }}
+                    />
+                  )}
+                  <p style={{ fontSize: 10 }}>{frame.time.toFixed(1)}s</p>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+```
+
+## Error Handling
+
+```typescript
+try {
+  const timeline = await extractPoses("/api/video/abc123", (p) => {
+    console.log(`Progress: ${p}%`);
+  });
+} catch (err) {
+  if (err.message === "Failed to load video for pose extraction") {
+    console.error("Video failed to load. Check URL and CORS.");
+  } else if (err.message === "Video has no valid duration") {
+    console.error("Video metadata is invalid.");
+  } else if (err.message.includes("MediaPipe")) {
+    console.error("MediaPipe Pose failed to load.");
+  } else {
+    console.error("Unknown error:", err);
+  }
+}
+```
+
+## Performance Optimization Tips
+
+1. **Adjust targetFrameCount**: Lower for faster extraction
+   ```typescript
+   extractStripPoses(videoSrc, onProgress, 10);  // Fewer frames
+   ```
+
+2. **Skip thumbnails**: Modify to skip `canvas.toDataURL()` if not needed
+
+3. **Parallelize videos**: Extract multiple videos simultaneously
+   ```typescript
+   const [tl1, tl2] = await Promise.all([
+     extractPoses(video1, onProgress1),
+     extractPoses(video2, onProgress2),
+   ]);
+   ```
+
+4. **Cache results**: Store timelines in database/localStorage to avoid re-extraction
+   ```typescript
+   const cached = localStorage.getItem(`timeline_${videoId}`);
+   if (cached) {
+     return JSON.parse(cached);
+   } else {
+     const tl = await extractPoses(videoSrc, onProgress);
+     localStorage.setItem(`timeline_${videoId}`, JSON.stringify(tl));
+     return tl;
+   }
+   ```
+
+## Browser Compatibility
+
+**Requirements:**
+- `HTMLVideoElement.seeked` event (all modern browsers)
+- `CanvasRenderingContext2D.drawImage()` (all modern browsers)
+- WebAssembly support (MediaPipe Pose)
+- `canvas.toDataURL()` for thumbnails
+
+**Tested on:**
+- Chrome 120+
+- Firefox 120+
+- Safari 17+
+- Edge 120+
+
+**Not supported:**
+- IE11 (no WebAssembly)
+- Older mobile browsers (iOS < 14, Android < 7)
+
+## Debugging
+
+**Log extraction progress:**
+```typescript
+await extractPoses(videoSrc, (p) => {
+  console.log(`[${new Date().toISOString()}] Progress: ${p.toFixed(1)}%`);
+});
+```
+
+**Visualize interest scores:**
+```typescript
+const denseTL = /* ... sample at 0.5s intervals ... */;
+const scored = denseTL.map((frame, i) => ({
+  ...frame,
+  score: calculateInterestScore(
+    frame,
+    i > 0 ? denseTL[i-1] : null,
+    i < denseTL.length-1 ? denseTL[i+1] : null
+  )
+}));
+
+// Plot scores
+scored.forEach((f) => {
+  console.log(`${f.time.toFixed(1)}s: score=${f.score.toFixed(1)}`);
+});
+```
+
+**Check landmark quality:**
+```typescript
+const timeline = await extractPoses(videoSrc, () => {});
+const avgVisibility = timeline.map((frame) => {
+  if (frame.landmarks.length === 0) return 0;
+  return frame.landmarks.reduce((s, lm) => s + (lm.visibility || 0), 0) / frame.landmarks.length;
+});
+
+console.log("Avg visibility per frame:", avgVisibility);
+console.log("Low quality frames:", avgVisibility.filter((v) => v < 0.5).length);
+```

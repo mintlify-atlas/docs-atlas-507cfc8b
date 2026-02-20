@@ -1,0 +1,342 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for Jiggle Wiggle deployment and usage
+---
+
+This guide covers common issues you might encounter when running Jiggle Wiggle and how to resolve them.
+
+## Installation Issues
+
+<Accordion title="yt-dlp not found">
+  **Error**: `spawn yt-dlp ENOENT` or `yt-dlp: command not found`
+
+  **Cause**: The `yt-dlp` binary is not installed or not on your system PATH.
+
+  **Solution**:
+
+  ```bash
+  # Ubuntu/Debian
+  sudo apt-get update
+  sudo apt-get install -y python3-pip
+  sudo pip3 install yt-dlp
+
+  # macOS
+  brew install yt-dlp
+
+  # Verify installation
+  yt-dlp --version
+  ```
+
+  **Docker users**: The Dockerfile handles this automatically. If you see this error in Docker, rebuild the image:
+
+  ```bash
+  docker build --no-cache -t jiggle-wiggle .
+  ```
+</Accordion>
+
+<Accordion title="ffmpeg not found">
+  **Error**: `ERROR: ffmpeg not found` or video download fails at merge step
+
+  **Cause**: The `ffmpeg` binary is not installed or not on your system PATH.
+
+  **Solution**:
+
+  ```bash
+  # Ubuntu/Debian
+  sudo apt-get update
+  sudo apt-get install -y ffmpeg
+
+  # macOS
+  brew install ffmpeg
+
+  # Verify installation
+  ffmpeg -version
+  ```
+</Accordion>
+
+<Accordion title="npm install fails with lightningcss or @tailwindcss/oxide errors">
+  **Error**: Missing platform-specific binaries for lightningcss or Tailwind CSS Oxide
+
+  **Cause**: Tailwind CSS 4 requires platform-specific native binaries.
+
+  **Solution**:
+
+  ```bash
+  npm install --no-save lightningcss-linux-x64-gnu@1.30.2
+  npm install --no-save @tailwindcss/oxide-linux-x64-gnu@4.1.18
+  ```
+
+  Adjust the package name based on your platform (e.g., `darwin-x64` for macOS).
+</Accordion>
+
+## Runtime Issues
+
+<Accordion title="Webcam not working or 'Camera permission denied'">
+  **Cause**: Browser security policies require HTTPS for webcam access (except on localhost).
+
+  **Solution**:
+
+  - **Development**: Run on `http://localhost:3000` (allowed without HTTPS)
+  - **Production**: Deploy with HTTPS enabled
+  - **Chrome**: Go to `chrome://settings/content/camera` and ensure your site is allowed
+  - **Firefox**: Check the address bar for camera permission prompts
+
+  **Testing permissions**:
+
+  ```javascript
+  navigator.mediaDevices.getUserMedia({ video: true })
+    .then(() => console.log('Camera access granted'))
+    .catch(err => console.error('Camera access denied:', err));
+  ```
+</Accordion>
+
+<Accordion title="Video download fails or times out">
+  **Error**: Download progress sticks at 0% or SSE stream closes prematurely
+
+  **Possible causes**:
+
+  1. **Age-restricted or private video**: yt-dlp cannot access the video
+  2. **Network issues**: Slow connection or firewall blocking YouTube
+  3. **Invalid video ID**: The 11-character video ID is malformed
+  4. **Rate limiting**: YouTube is throttling requests
+
+  **Solution**:
+
+  - Verify the video is public and not age-restricted
+  - Test yt-dlp directly:
+
+  ```bash
+  yt-dlp -f "best[ext=mp4]" "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  ```
+
+  - Check server logs for detailed error messages
+  - Try a different video to rule out video-specific issues
+</Accordion>
+
+<Accordion title="MediaPipe fails to load or pose detection not working">
+  **Error**: `Failed to load MediaPipe` or skeleton overlay not appearing
+
+  **Cause**: MediaPipe is loaded from CDN and may be blocked or failing to load.
+
+  **Solution**:
+
+  - Check browser console for errors
+  - Verify CDN access:
+
+  ```bash
+  curl https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js
+  ```
+
+  - Clear browser cache and reload
+  - Check if your network blocks `cdn.jsdelivr.net`
+  - Ensure JavaScript is enabled
+</Accordion>
+
+## API Issues
+
+<Accordion title="AI coach not working or returning generic messages">
+  **Error**: Coach says "Keep moving!" or "You've got this!" without specific feedback
+
+  **Cause**: `OPENAI_API_KEY` is missing or invalid.
+
+  **Solution**:
+
+  1. Verify your API key is set:
+
+  ```bash
+  echo $OPENAI_API_KEY
+  ```
+
+  2. Check the key is valid at [platform.openai.com](https://platform.openai.com/api-keys)
+  3. Ensure you have credits available in your OpenAI account
+  4. Check server logs for detailed error messages
+
+  **Test the endpoint**:
+
+  ```bash
+  curl -X POST http://localhost:3000/api/coach \
+    -H "Content-Type: application/json" \
+    -d '{"summary":{"score":75},"history":[],"mode":"dance"}'
+  ```
+</Accordion>
+
+<Accordion title="Vision scoring not working (Groq)">
+  **Error**: Scoring feels less accurate or only uses geometric comparison
+
+  **Cause**: `GROQ_API_KEY` is missing or the API is down.
+
+  **Solution**:
+
+  - Set the `GROQ_API_KEY` environment variable
+  - Verify the key at [console.groq.com](https://console.groq.com/keys)
+  - Check Groq API status
+  - The app falls back to geometric scoring if Groq is unavailable
+</Accordion>
+
+<Accordion title="AI Generate feature not working">
+  **Error**: Video generation fails or times out
+
+  **Possible causes**:
+
+  1. **Missing API keys**: `XAI_API_KEY` or `PERPLEXITY_API_KEY` not set
+  2. **Rate limits**: Exceeded Grok or Perplexity quota
+  3. **API downtime**: xAI or Perplexity services unavailable
+
+  **Solution**:
+
+  - Verify both API keys are set
+  - Check API usage dashboards for rate limit status
+  - Wait and retry if rate limited
+  - Check server logs for specific error messages
+</Accordion>
+
+<Accordion title="API rate limit exceeded">
+  **Error**: `429 Too Many Requests` or `Rate limit exceeded`
+
+  **Cause**: You've exceeded the free tier or rate limits for OpenAI, Groq, Perplexity, or xAI.
+
+  **Solution**:
+
+  - Check your usage on each provider's dashboard
+  - Upgrade to a paid tier if needed
+  - Implement request throttling on the client side
+  - Cache responses where possible
+
+  **Rate limit reference**:
+
+  - OpenAI: [platform.openai.com/account/limits](https://platform.openai.com/account/limits)
+  - Groq: 30 requests/minute (free tier)
+  - Perplexity: 5 requests/minute (free tier)
+</Accordion>
+
+## Performance Issues
+
+<Accordion title="Pose extraction is slow or crashes">
+  **Cause**: Large videos or low-powered devices struggle with client-side MediaPipe processing.
+
+  **Solution**:
+
+  - Use shorter videos (under 30 seconds recommended)
+  - Close other browser tabs to free up memory
+  - Use a device with a modern CPU (pose detection is CPU-intensive)
+  - The app samples at 0.1s intervals (10 FPS) — this is already optimized
+</Accordion>
+
+<Accordion title="Frame rate drops during webcam tracking">
+  **Cause**: MediaPipe Pose runs at ~30 FPS and is computationally expensive.
+
+  **Solution**:
+
+  - Close other applications to free up CPU
+  - Use a device with a dedicated GPU (if available, WebGL acceleration helps)
+  - Reduce webcam resolution if your browser allows it
+  - Ensure good lighting (helps MediaPipe detect landmarks more efficiently)
+</Accordion>
+
+<Accordion title="Video playback stutters or buffers">
+  **Cause**: Large video files or slow disk I/O.
+
+  **Solution**:
+
+  - Videos are served with HTTP range requests for streaming
+  - Check `/tmp/jigglewiggle/` has sufficient disk space
+  - On Docker, ensure the volume mount is performant
+  - Use a CDN or object storage for production deployments
+</Accordion>
+
+## Deployment Issues
+
+<Accordion title="Docker build fails">
+  **Common errors**:
+
+  - `npm ci` fails: Delete `node_modules` and `package-lock.json`, run `npm install` locally first
+  - `yt-dlp` install fails: Verify the Dockerfile `RUN` command syntax
+  - Build timeouts: Increase Docker build timeout or use a faster network
+
+  **Solution**:
+
+  ```bash
+  # Clean build
+  docker build --no-cache -t jiggle-wiggle .
+
+  # Check logs
+  docker logs <container-id>
+  ```
+</Accordion>
+
+<Accordion title="Environment variables not being read">
+  **Cause**: Variables not passed to the Docker container or Next.js.
+
+  **Solution**:
+
+  - **Docker**: Use `--env-file` or `-e` flags
+  - **Next.js**: Ensure variables are in `.env.local` (not `.env`)
+  - **Server-side only**: API keys are only available in API routes, not client components
+  - Restart the dev server after adding new variables
+
+  ```bash
+  # Verify variables in container
+  docker exec <container-id> printenv | grep API_KEY
+  ```
+</Accordion>
+
+<Accordion title="Vercel deployment times out">
+  **Cause**: Serverless functions have a 10-second timeout on the Hobby plan.
+
+  **Solution**:
+
+  - Upgrade to Vercel Pro for 60-second timeouts
+  - Use Docker deployment instead (recommended for Jiggle Wiggle)
+  - Split long-running operations into separate API routes
+</Accordion>
+
+## Debug Mode
+
+Enable verbose logging:
+
+```bash
+# In .env.local
+NEXT_PUBLIC_DEBUG=true
+```
+
+Check server logs:
+
+```bash
+# Docker
+docker logs -f <container-id>
+
+# Local dev
+npm run dev
+```
+
+Check browser console:
+
+1. Open DevTools (F12)
+2. Go to Console tab
+3. Look for errors or warnings
+
+## Getting Help
+
+If you're still stuck:
+
+1. **Check the logs**: Server logs often contain detailed error messages
+2. **GitHub Issues**: Search for similar issues at the repository
+3. **Community**: Ask on the project's discussion board or Discord
+4. **Documentation**: Review [Environment Variables](/advanced/environment-variables) and [Deployment](/advanced/deployment)
+
+## Common Error Messages
+
+| Error | Likely Cause | Quick Fix |
+|-------|--------------|----------|
+| `spawn yt-dlp ENOENT` | yt-dlp not installed | Install yt-dlp |
+| `OPENAI_API_KEY not configured` | Missing API key | Set in `.env.local` |
+| `Permission denied` (webcam) | No HTTPS or permissions | Use HTTPS or localhost |
+| `Failed to load MediaPipe` | CDN blocked or offline | Check network/firewall |
+| `429 Too Many Requests` | Rate limit exceeded | Wait or upgrade plan |
+| `GROQ_API_KEY not configured` | Missing API key | Set in `.env.local` |
+| `Video not found` | Invalid video ID | Check YouTube URL |
+
+## Next Steps
+
+- [Environment Variables](/advanced/environment-variables) - Review configuration
+- [Deployment](/advanced/deployment) - Redeploy with fixes

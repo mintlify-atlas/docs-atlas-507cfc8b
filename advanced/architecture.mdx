@@ -1,0 +1,479 @@
+---
+title: System Architecture
+description: Complete system architecture overview, data flow pipelines, and technical design decisions for Jiggle Wiggle
+---
+
+## Overview
+
+Jiggle Wiggle is a real-time AI dance and fitness coaching web application built with Next.js 16, featuring a complex multi-stage pipeline that processes YouTube videos, performs client-side pose detection, and delivers intelligent coaching feedback.
+
+## High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          CLIENT LAYER                           │
+├─────────────────────────────────────────────────────────────────┤
+│  React 19 + Next.js 16 App Router                               │
+│  • Main Orchestrator (app/page.tsx)                             │
+│  • CameraPanel (webcam + MediaPipe WASM)                        │
+│  • YoutubePanel (video player + pose timeline)                  │
+│  • ModeOverlay (gym/dance theme switching)                      │
+└─────────────────────────────────────────────────────────────────┘
+                               ↕
+┌─────────────────────────────────────────────────────────────────┐
+│                          API LAYER                              │
+├─────────────────────────────────────────────────────────────────┤
+│  Next.js API Routes                                             │
+│  • /api/download → yt-dlp spawner (SSE)                         │
+│  • /api/video/[id] → MP4 serving (range requests)               │
+│  • /api/coach → OpenAI GPT-4o-mini + TTS                        │
+│  • /api/score → Groq vision scoring                             │
+│  • /api/report → Performance report generation                   │
+│  • /api/generate → AI video generation pipeline                 │
+│  • /api/segment → SAM2 person segmentation (Modal)              │
+└─────────────────────────────────────────────────────────────────┘
+                               ↕
+┌─────────────────────────────────────────────────────────────────┐
+│                     EXTERNAL SERVICES                           │
+├─────────────────────────────────────────────────────────────────┤
+│  • yt-dlp + ffmpeg (video download & processing)                │
+│  • OpenAI API (coaching LLM + TTS)                              │
+│  • Groq API (vision scoring + classification)                   │
+│  • xAI Grok (video generation)                                  │
+│  • Perplexity Sonar (research for AI generation)                │
+│  • Modal (SAM2 segmentation model)                              │
+│  • ElevenLabs (high-quality TTS fallback)                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Core Data Flows
+
+### 1. Video Download & Classification Pipeline
+
+```
+YouTube URL
+    ↓
+/api/download (POST)
+    ↓
+yt-dlp --dump-json (parallel classification)
+    ↓
+Groq LLaMA 3.1 8B → "dance" or "gym"
+    ↓
+yt-dlp download (SSE progress events)
+    ↓
+/tmp/jigglewiggle/{videoId}.mp4
+    ↓
+SSE events: progress → done → classified
+    ↓
+Client: ModeOverlay flash animation
+```
+
+**Technical Decisions:**
+- **SSE streaming** instead of WebSockets for simplicity and HTTP compatibility
+- **Parallel classification** during download to minimize latency
+- **Ephemeral storage** in `/tmp` with implicit TTL for legal compliance
+- **8-second safety timeout** for classification to prevent UI blocking
+
+### 2. Pose Extraction Pipeline (Reference Video)
+
+```
+Downloaded MP4
+    ↓
+Hidden <video> + <canvas> elements
+    ↓
+Seek through frames at 0.1s intervals (10fps)
+    ↓
+MediaPipe Pose (CDN-loaded WASM, model complexity 1)
+    ↓
+PoseTimeline: Array<{ time: number, landmarks: NormalizedLandmark[] }>
+    ↓
+Interest score calculation:
+  • Motion energy (displacement from prev frame)
+  • Pose extremity (arm height, knee bend, spread)
+  • Local peak detection
+    ↓
+Greedy selection with temporal spacing constraints
+    ↓
+MoveQueue strip (20 keyframes with thumbnails)
+```
+
+**File:** `app/lib/videoPoseExtractor.ts`
+
+**Technical Decisions:**
+- **Client-side extraction** to avoid uploading large videos
+- **320px max dimension** for MediaPipe input to balance speed vs accuracy
+- **Smart frame selection** instead of uniform sampling to highlight dynamic moments
+- **Temporal spacing constraints** prevent clustering of selected frames
+
+### 3. Real-Time Scoring Pipeline
+
+```
+Webcam frame (30fps)
+    ↓
+MediaPipe Pose (client-side WASM)
+    ↓
+3-signal scoring blend:
+
+┌─────────────────────────────────────────────────────┐
+│ Signal 1: Geometric Pose Comparison (50-80%)        │
+│ • Find closest reference frame by timestamp         │
+│ • Normalize both poses (center hip, scale torso)    │
+│ • Aspect ratio correction (16:9 vs 4:3)             │
+│ • Per-limb distance scoring                         │
+│ • Reference-centric: only compare visible landmarks │
+└─────────────────────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────────────────────┐
+│ Signal 2: Groq Vision Scoring (40%, every 3s)       │
+│ • Capture reference frame as JPEG base64            │
+│ • Capture webcam frame as JPEG base64               │
+│ • POST to /api/score                                │
+│ • Groq LLaMA-4 Scout 17B (vision model)             │
+│ • Returns 0-100 score + per-limb breakdown          │
+│ • EMA smoothing (alpha=0.25)                        │
+└─────────────────────────────────────────────────────┘
+         ↓
+┌─────────────────────────────────────────────────────┐
+│ Signal 3: Heuristic Body Metrics (10-20%)           │
+│ • Arm height vs shoulder line                       │
+│ • Left/right symmetry                               │
+│ • Motion energy (keypoint velocity)                 │
+│ • Torso angle                                       │
+└─────────────────────────────────────────────────────┘
+         ↓
+Blended score
+    ↓
+EMA smoothing (alpha=0.15, dead zone=2)
+    ↓
+Frame hit detection at key pose timestamps
+    ↓
+Tier classification:
+  • PERFECT: 90+  (+25 points)
+  • GREAT:   80+  (+20 points)
+  • OK:      60+  (+15 points)
+  • ALMOST:  40+  (+10 points)
+  • MISS:    &lt;40  (0 points)
+    ↓
+Score popup + particle effects
+    ↓
+Combo streak detection (every 5th consecutive non-miss)
+```
+
+**Files:** 
+- `app/lib/scoring.ts` (heuristic scoring)
+- `app/lib/poseComparison.ts` (geometric comparison)
+- `app/lib/groqScoring.ts` (vision API integration)
+
+**Technical Decisions:**
+- **Multi-signal blending** provides robustness against single-method failures
+- **Reference-centric comparison** prevents penalizing users for extra visible landmarks
+- **Aspect ratio correction** ensures fair comparison between different camera types
+- **EMA smoothing** reduces jitter while maintaining responsiveness
+- **Dead zone** prevents micro-fluctuations from triggering UI updates
+
+### 4. AI Coaching Pipeline
+
+```
+Every 3-5 seconds (adaptive interval based on performance)
+    ↓
+buildPoseSummary()
+  • Score, confidence, trend
+  • Body metrics (arm height, symmetry, motion, torso, knees)
+  • Reference match data (if available)
+  • Issues array
+  • Session time
+    ↓
+Delta tracking:
+  • Score change since last check
+  • Worst limb changes
+  • Energy level changes
+  • Arm height changes
+    ↓
+Milestone detection:
+  • Personal best scores (bucketed by 10)
+  • First 80+, 90+ achievements
+  • Comeback detection (40→70)
+  • Time milestones (1min, 3min, 5min)
+  • Sustained excellence (80+ steady)
+    ↓
+Anti-repetition mechanisms:
+  • Last 10 coach lines → "DO NOT SAY" list
+  • Fuzzy duplicate detection (Jaccard similarity)
+  • Rotating coaching style (12 styles)
+  • Compact history format
+    ↓
+POST /api/coach
+    ↓
+OpenAI GPT-4o-mini:
+  • System prompt (dance vs gym mode)
+  • Conversation history (last 16 messages)
+  • Enriched summary with delta + milestones
+  • Temperature 0.95
+  • Presence penalty 0.6, frequency penalty 0.4
+    ↓
+Text message (max 15 words)
+    ↓
+TTS generation:
+  Primary: ElevenLabs Turbo v2.5
+    • Dance: "Rachel" voice (21m00Tcm4TlvDq8ikWAM)
+    • Gym:   "Adam" voice (pNInz6obpgDQGcFmaJgB)
+  Fallback: OpenAI TTS-1-HD
+    • Dance: "shimmer" voice
+    • Gym:   "onyx" voice
+    ↓
+MP3 audio as base64
+    ↓
+Client: Audio playback + text display
+```
+
+**Files:**
+- `app/shared/coach.ts` (client-side orchestration)
+- `app/api/coach/route.ts` (server-side LLM + TTS)
+
+**Technical Decisions:**
+- **Adaptive interval** (3.5s-5.5s) based on performance prevents spam during struggles
+- **Delta tracking** ensures feedback reacts to changes, not static state
+- **Milestone detection** creates memorable moments and celebrates progress
+- **12 rotating coaching styles** force LLM to vary approach (questions, commands, hype, metaphors, etc.)
+- **Jaccard similarity** catches fuzzy duplicates that exact string matching misses
+- **Compact history format** prevents repetitive JSON from encouraging repetitive responses
+- **Presence/frequency penalties** on API discourage token repetition
+- **ElevenLabs priority** for higher quality, more natural-sounding audio
+
+### 5. AI Video Generation Pipeline
+
+```
+User prompt ("10 jumping jacks" or "salsa dance basic step")
+    ↓
+Classification (keyword matching) → "dance" or "gym" mode
+    ↓
+Perplexity Sonar Pro (web-grounded research):
+  • Detailed exercise routines
+  • Step-by-step instructions
+  • Form cues and muscle groups
+  • Timing for each movement
+    ↓
+GPT-4o-mini synthesis:
+  Prompt: "Create detailed visual description for 10s video"
+  Requirements:
+    • Static camera (locked-off front-facing medium shot)
+    • Plain white background
+    • Full body visible head to toe
+    • Clear, deliberate form
+    ↓
+Video description (under 200 words)
+    ↓
+Grok video generation:
+  • Model: "grok-imagine-video"
+  • Duration: 10s
+  • Aspect ratio: 4:3
+  • Resolution: 480p
+    ↓
+Polling loop (5s intervals, max 10 minutes):
+  • GET /v1/videos/{request_id}
+  • Status: pending → video.url available
+    ↓
+Download video to /tmp/jigglewiggle/gen_{timestamp}.mp4
+    ↓
+SSE events: genId → classified → progress → synthesis → done
+```
+
+**Files:**
+- `app/api/generate/route.ts`
+- `app/lib/grok.ts`
+
+**Technical Decisions:**
+- **Perplexity research phase** grounds generation in real fitness knowledge
+- **GPT-4o-mini synthesis** translates research into visual descriptions optimized for video generation
+- **Strict prompt constraints** (static camera, plain background) improve consistency
+- **Lower resolution (480p)** balances quality with generation speed
+- **4:3 aspect ratio** matches typical exercise video framing
+- **Polling with exponential backoff** (handled by client) prevents rate limit issues
+
+## State Management Patterns
+
+### Classification Gate Pattern
+
+`page.tsx` holds `classificationStatus: 'idle' | 'pending' | 'done'`
+
+- Download completes → status = 'pending'
+- Arena UI stays hidden, shows "Detecting mode..." indicator
+- SSE 'classified' event → status = 'done' → ModeOverlay fires
+- 8-second safety timeout → default to 'dance' mode if no classification
+
+This prevents users from seeing the wrong theme flash before classification completes.
+
+### Stable Callback Ref Pattern
+
+`onPoseRef` pattern in `page.tsx` prevents CameraPanel remounts when scoring/coaching logic changes:
+
+```typescript
+const onPoseRef = useRef<(landmarks: NormalizedLandmark[]) => void>();
+
+const handlePose = useCallback((landmarks: NormalizedLandmark[]) => {
+  onPoseRef.current?.(landmarks);
+}, []); // Empty deps!
+
+// Update ref without triggering re-render
+useEffect(() => {
+  onPoseRef.current = (landmarks) => {
+    // Actual scoring/coaching logic that changes frequently
+  };
+}, [/* all the dependencies */]);
+```
+
+### forwardRef + useImperativeHandle Pattern
+
+YoutubePanel exposes `getCurrentTime()` so parent can poll video position via rAF loop for MoveQueue synchronization:
+
+```typescript
+const YoutubePanel = forwardRef<YoutubePanelRef, Props>((props, ref) => {
+  useImperativeHandle(ref, () => ({
+    getCurrentTime: () => videoRef.current?.currentTime ?? 0
+  }));
+});
+```
+
+## Storage & Caching
+
+### Video Storage
+
+- **Location:** `/tmp/jigglewiggle/`
+- **Format:** `{videoId}.mp4` or `gen_{timestamp}.mp4`
+- **Retention:** Ephemeral (relies on OS tmpfs cleanup)
+- **Validation:** Regex `^[a-zA-Z0-9_-]{11}$` for YouTube IDs
+- **Cache check:** `access()` before re-downloading
+
+### MediaPipe CDN Loading
+
+MediaPipe Pose loaded dynamically via script injection to avoid bloating Next.js bundle:
+
+```javascript
+// app/lib/pose.ts
+await loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js");
+const pose = new window.Pose({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+});
+```
+
+**Retry logic:** 3 attempts with exponential backoff for CDN transient failures
+
+## Performance Characteristics
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Video download | 30-60s | Depends on video length, network |
+| Classification | &lt;2s | Groq LLaMA 3.1 8B |
+| Pose extraction | ~10s | 60s video → 600 frames @ 0.1s intervals |
+| Webcam pose inference | 30fps | MediaPipe WASM, model complexity 1 |
+| Groq vision scoring | 2-3s | Every 3s, non-blocking |
+| Coaching LLM call | 1-2s | GPT-4o-mini |
+| TTS generation | 0.5-1s | ElevenLabs Turbo v2.5 |
+| AI video generation | 2-5min | Grok video model |
+
+## Error Handling & Resilience
+
+### SSE Error Handling
+
+- Download failures → `error` event with truncated stderr (last 500 chars)
+- Client-side timeout → fallback to default mode
+- Stream cancellation → `cancelled` flag pattern prevents ERR_INVALID_STATE
+
+### Groq Vision Retry Logic
+
+- Max 3 consecutive errors before exponential backoff
+- Interval doubles on failure (3s → 6s → 12s, max 30s)
+- Reset to normal interval on first success
+
+### MediaPipe CDN Retry
+
+- 3 attempts with 1s, 2s, 3s delays
+- Remove failed script tag before retry
+- 100ms delay after successful load for global initialization
+
+### Coach Anti-Spam Protection
+
+- Rate limit: max 1 call per adaptive interval (3.5-5.5s)
+- Skip if audio currently playing
+- Skip if no pose detected and last message was "no pose"
+- Suppress exact duplicates within 15s
+- Suppress fuzzy duplicates via Jaccard similarity
+
+## Security Considerations
+
+### Video ID Validation
+
+Strict regex prevents path traversal:
+```typescript
+if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+  return NextResponse.json({ error: "Invalid video ID" }, { status: 400 });
+}
+```
+
+### Range Request Safety
+
+- Validate byte range before reading
+- Return 416 if range exceeds file size
+- Close file handle on stream cancellation
+- `cancelled` flag prevents double-close errors
+
+### API Key Management
+
+- All keys in `.env.local` (gitignored)
+- Server-side only (never exposed to client)
+- Graceful degradation if keys missing
+
+### CORS Configuration
+
+Video serving configured for same-origin only (no CORS headers)
+
+## Deployment Considerations
+
+### System Dependencies
+
+- **yt-dlp** must be installed and on PATH
+- **ffmpeg** required by yt-dlp for video muxing
+- **Node.js 18+** for Next.js 16 compatibility
+
+### Environment Variables
+
+```bash
+OPENAI_API_KEY=sk-...       # Required for coaching + reports
+GROQ_API_KEY=gsk_...         # Required for vision scoring + classification
+XAI_API_KEY=xai-...          # Optional for AI video generation
+PERPLEXITY_API_KEY=...       # Optional for AI generation research
+ELEVENLABS_API_KEY=...       # Optional for high-quality TTS
+```
+
+### Build Output
+
+- **Bundle size:** ~800KB (MediaPipe loaded from CDN, not bundled)
+- **Static pages:** None (all dynamic)
+- **API routes:** 7 endpoints
+- **Client components:** Heavy use of hooks, requires React 19
+
+## Tech Stack Summary
+
+| Layer | Technology | Version |
+|-------|-----------|--------|
+| Framework | Next.js | 16 (App Router) |
+| Runtime | React | 19 |
+| Language | TypeScript | 5.x |
+| Styling | Tailwind CSS | 4 |
+| Pose Detection | MediaPipe Pose | 0.5.1675469404 |
+| LLM (Coaching) | OpenAI GPT-4o-mini | - |
+| Vision Scoring | Groq LLaMA-4 Scout 17B | - |
+| Classification | Groq LLaMA 3.1 8B | - |
+| Video Generation | xAI Grok Imagine | - |
+| Research | Perplexity Sonar Pro | - |
+| TTS (Primary) | ElevenLabs Turbo v2.5 | - |
+| TTS (Fallback) | OpenAI TTS-1-HD | - |
+| Video Download | yt-dlp | - |
+| Video Processing | ffmpeg | - |
+| Segmentation | Modal SAM2 | - |
+
+## Related Pages
+
+- [Pose Detection Deep Dive](/advanced/pose-detection)
+- [AI Integrations](/advanced/ai-integrations)
+- [Video Processing Pipeline](/advanced/video-processing)

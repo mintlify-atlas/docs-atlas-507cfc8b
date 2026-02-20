@@ -1,0 +1,309 @@
+---
+title: "Pose Detection Library"
+description: "MediaPipe Pose integration for skeleton detection and rendering"
+---
+
+The `pose.ts` library provides MediaPipe Pose integration for Jiggle Wiggle, handling pose detection setup and skeleton visualization.
+
+## Types
+
+### NormalizedLandmark
+
+```typescript
+type NormalizedLandmark = {
+  x: number;        // Normalized x-coordinate (0-1)
+  y: number;        // Normalized y-coordinate (0-1)
+  z: number;        // Depth coordinate
+  visibility?: number; // Confidence score (0-1)
+};
+```
+
+Represents a single body keypoint in normalized coordinates. MediaPipe returns 33 landmarks per pose.
+
+### PoseResults
+
+```typescript
+type PoseResults = {
+  poseLandmarks?: NormalizedLandmark[];
+};
+```
+
+MediaPipe Pose detection result containing an array of landmarks.
+
+### SkeletonStyle
+
+```typescript
+type SkeletonStyle = {
+  mirror?: boolean;              // Horizontal flip (default: true)
+  strokeColor?: string;          // Connection color (default: "#00FF88")
+  fillColor?: string;            // Keypoint color (default: "#FF4488")
+  lineWidth?: number;            // Connection thickness (default: 3)
+  pointRadius?: number;          // Keypoint radius (default: 5)
+  opacity?: number;              // Global alpha (default: 1)
+  clear?: boolean;               // Clear canvas first (default: true)
+  connectionColors?: Map<string, string>; // Per-connection colors
+};
+```
+
+Styling options for skeleton rendering. Use `connectionColors` for color-coded feedback (see pose comparison).
+
+## Constants
+
+### NECK_INDEX
+
+```typescript
+const NECK_INDEX = 33;
+```
+
+Virtual landmark index for the synthetic neck point (midpoint of shoulders 11 & 12).
+
+### POSE_CONNECTIONS
+
+```typescript
+const POSE_CONNECTIONS: [number, number][] = [
+  [0, NECK_INDEX],   // Nose to neck
+  [NECK_INDEX, 11],  // Neck to left shoulder
+  [NECK_INDEX, 12],  // Neck to right shoulder
+  [11, 13],          // Left shoulder to elbow
+  [13, 15],          // Left elbow to wrist
+  [12, 14],          // Right shoulder to elbow
+  [14, 16],          // Right elbow to wrist
+  [11, 23],          // Left shoulder to hip
+  [12, 24],          // Right shoulder to hip
+  [23, 24],          // Hip connection
+  [23, 25],          // Left hip to knee
+  [25, 27],          // Left knee to ankle
+  [24, 26],          // Right hip to knee
+  [26, 28],          // Right knee to ankle
+  [27, 29],          // Left ankle to heel
+  [28, 30],          // Right ankle to heel
+  [29, 31],          // Left heel to foot
+  [30, 32],          // Right heel to foot
+];
+```
+
+Pairs of landmark indices defining the skeleton connections. Includes the synthetic neck connection.
+
+## Functions
+
+### loadPose
+
+```typescript
+async function loadPose(): Promise<unknown>
+```
+
+Dynamically loads MediaPipe Pose from CDN and returns a configured instance.
+
+**Features:**
+- Loads from `@mediapipe/pose@0.5.1675469404` (jsDelivr CDN)
+- Auto-retries up to 3 times on transient CDN failures
+- Exponential backoff: 1s, 2s, 3s delays
+- Removes failed script tags before retry
+- Pre-configured with optimal settings
+
+**Configuration:**
+```typescript
+{
+  modelComplexity: 1,           // Balance speed/accuracy
+  smoothLandmarks: true,        // Temporal smoothing
+  enableSegmentation: false,    // Skip person mask
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
+}
+```
+
+**Usage:**
+```typescript
+import { loadPose } from "@/lib/pose";
+
+const pose = await loadPose();
+
+// Set up results callback
+pose.onResults((results) => {
+  if (results.poseLandmarks) {
+    console.log("Detected", results.poseLandmarks.length, "landmarks");
+  }
+});
+
+// Process video frames
+pose.send({ image: videoElement });
+```
+
+**Error handling:**
+```typescript
+try {
+  const pose = await loadPose();
+} catch (err) {
+  console.error("Failed to load MediaPipe after 3 attempts:", err);
+}
+```
+
+### drawSkeleton
+
+```typescript
+function drawSkeleton(
+  ctx: CanvasRenderingContext2D,
+  landmarks: NormalizedLandmark[],
+  width: number,
+  height: number,
+  style?: SkeletonStyle
+)
+```
+
+Draws a skeleton overlay on a canvas from pose landmarks.
+
+**Parameters:**
+- `ctx`: Canvas 2D rendering context
+- `landmarks`: Array of 33+ normalized landmarks
+- `width`: Canvas width in pixels
+- `height`: Canvas height in pixels
+- `style`: Optional styling configuration
+
+**Features:**
+- **Synthetic neck**: Automatically creates neck landmark as midpoint of shoulders
+- **Visibility filtering**: Only draws landmarks with visibility ≥ 0.3
+- **Mirroring**: Horizontal flip for webcam feeds (configurable)
+- **Per-connection colors**: Use `connectionColors` map for color-coded feedback
+- **Keypoint selection**: Renders nose (0), neck (33), and body landmarks (11+)
+
+**Basic usage:**
+```typescript
+import { drawSkeleton } from "@/lib/pose";
+
+const canvas = document.getElementById("canvas") as HTMLCanvasElement;
+const ctx = canvas.getContext("2d")!;
+
+// Draw with default styling (green connections, pink keypoints)
+drawSkeleton(ctx, landmarks, canvas.width, canvas.height);
+```
+
+**Custom styling:**
+```typescript
+drawSkeleton(ctx, landmarks, canvas.width, canvas.height, {
+  mirror: false,              // No horizontal flip
+  strokeColor: "#00BFFF",     // Blue connections
+  fillColor: "#FFD700",       // Gold keypoints
+  lineWidth: 5,
+  pointRadius: 7,
+  opacity: 0.8,
+  clear: false                // Don't clear canvas first
+});
+```
+
+**Color-coded feedback (from pose comparison):**
+```typescript
+import { comparePoses } from "@/lib/poseComparison";
+
+const { connectionColors } = comparePoses(refLandmarks, liveLandmarks);
+
+// Draw with red/yellow/green connections based on match quality
+drawSkeleton(ctx, liveLandmarks, canvas.width, canvas.height, {
+  connectionColors,
+  strokeColor: "#808080"  // Fallback for unmapped connections
+});
+```
+
+## Coordinate System
+
+MediaPipe Pose returns landmarks in normalized coordinates:
+
+- **x, y**: Range [0, 1] relative to image dimensions
+- **z**: Depth (same scale as x, origin at hips)
+- **visibility**: Confidence score [0, 1]
+
+**Mirror transformation:**
+```typescript
+const xPos = (x: number) => (mirror ? (1 - x) * width : x * width);
+const yPos = (y: number) => y * height;
+```
+
+## MediaPipe Landmark Index Reference
+
+```
+0  = Nose
+11 = Left shoulder
+12 = Right shoulder
+13 = Left elbow
+14 = Right elbow
+15 = Left wrist
+16 = Right wrist
+23 = Left hip
+24 = Right hip
+25 = Left knee
+26 = Right knee
+27 = Left ankle
+28 = Right ankle
+33 = Synthetic neck (created by drawSkeleton)
+```
+
+See [MediaPipe Pose documentation](https://developers.google.com/mediapipe/solutions/vision/pose_landmarker) for the complete 33-landmark topology.
+
+## Performance Notes
+
+- **CDN loading**: ~500ms initial load + 100ms initialization
+- **Model size**: ~6MB WASM binary (not bundled with Next.js)
+- **Processing speed**: 30-60 FPS on modern hardware (modelComplexity: 1)
+- **Retry strategy**: 3 attempts with exponential backoff handles transient CDN issues
+
+## Integration Example
+
+```typescript
+import { loadPose, drawSkeleton, type NormalizedLandmark } from "@/lib/pose";
+import { useEffect, useRef } from "react";
+
+export function WebcamPose() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    let pose: any;
+    let animationId: number;
+
+    async function init() {
+      // Load MediaPipe Pose
+      pose = await loadPose();
+
+      // Set up webcam
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoRef.current!.srcObject = stream;
+      await videoRef.current!.play();
+
+      // Set up pose detection
+      pose.onResults((results: { poseLandmarks?: NormalizedLandmark[] }) => {
+        const ctx = canvasRef.current!.getContext("2d")!;
+        if (results.poseLandmarks) {
+          drawSkeleton(
+            ctx,
+            results.poseLandmarks,
+            canvasRef.current!.width,
+            canvasRef.current!.height
+          );
+        }
+      });
+
+      // Process frames
+      function processFrame() {
+        if (videoRef.current!.readyState === 4) {
+          pose.send({ image: videoRef.current });
+        }
+        animationId = requestAnimationFrame(processFrame);
+      }
+      processFrame();
+    }
+
+    init();
+
+    return () => {
+      cancelAnimationFrame(animationId);
+      pose?.close();
+    };
+  }, []);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <video ref={videoRef} style={{ display: "none" }} />
+      <canvas ref={canvasRef} width={640} height={480} />
+    </div>
+  );
+}
+```

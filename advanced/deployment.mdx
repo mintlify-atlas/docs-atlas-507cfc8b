@@ -1,0 +1,168 @@
+---
+title: Deployment
+description: Deploy Jiggle Wiggle to various platforms including Docker, Render, and other hosting providers
+---
+
+Jiggle Wiggle can be deployed to various platforms. This guide covers deployment options and platform-specific instructions.
+
+## Prerequisites
+
+Before deploying, ensure you have:
+
+- Node.js 18 or higher
+- Required API keys (see [Environment Variables](/advanced/environment-variables))
+- System dependencies: `yt-dlp` and `ffmpeg`
+
+## Docker Deployment
+
+The recommended deployment method is using Docker, which handles all system dependencies automatically.
+
+### Build the Docker Image
+
+```bash
+docker build -t jiggle-wiggle .
+```
+
+### Run the Container
+
+```bash
+docker run -p 3000:3000 \
+  -e OPENAI_API_KEY=sk-... \
+  -e GROQ_API_KEY=gsk_... \
+  -e XAI_API_KEY=xai-... \
+  -e PERPLEXITY_API_KEY=... \
+  jiggle-wiggle
+```
+
+### Docker Compose
+
+Create a `docker-compose.yml` file:
+
+```yaml
+version: '3.8'
+services:
+  jiggle-wiggle:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - XAI_API_KEY=${XAI_API_KEY}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+    volumes:
+      - /tmp/jigglewiggle:/tmp/jigglewiggle
+```
+
+Then run:
+
+```bash
+docker-compose up -d
+```
+
+## Render Deployment
+
+Jiggle Wiggle includes a `render.yaml` configuration for easy deployment to Render.
+
+### Using the Render Blueprint
+
+1. Fork the Jiggle Wiggle repository
+2. Connect your GitHub account to Render
+3. Create a new Web Service from your fork
+4. Render will automatically detect the `render.yaml` configuration
+5. Set the required environment variables in the Render dashboard
+
+### Manual Render Setup
+
+If not using the blueprint:
+
+1. Create a new **Web Service** on Render
+2. Select **Docker** as the runtime
+3. Set the region (e.g., Oregon)
+4. Configure environment variables (see [Environment Variables](/advanced/environment-variables))
+5. Deploy
+
+## Vercel Deployment
+
+<Warning>
+Vercel deployment has limitations due to serverless function constraints. Docker deployment is recommended for production use.
+</Warning>
+
+Jiggle Wiggle uses system dependencies (`yt-dlp`, `ffmpeg`) that are not available in Vercel's serverless environment by default. You'll need to:
+
+1. Use the Vercel CLI: `vercel deploy`
+2. Configure environment variables in the Vercel dashboard
+3. Note that video download and processing may have timeouts on the hobby plan
+
+## Platform-Specific Notes
+
+### System Dependencies
+
+All platforms must have `yt-dlp` and `ffmpeg` installed and available on the PATH:
+
+- **Docker**: Handled automatically by the Dockerfile
+- **Render**: Install via `render.yaml` build commands or Docker runtime
+- **VPS/Bare Metal**: Install manually:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install -y ffmpeg python3-pip
+sudo pip3 install yt-dlp
+
+# macOS
+brew install ffmpeg yt-dlp
+```
+
+### Video Storage
+
+Videos are stored in `/tmp/jigglewiggle/` by default. On serverless platforms, this directory is ephemeral and cleared between deployments.
+
+For persistent storage, consider:
+
+- Mounting a volume (Docker)
+- Using object storage (S3, R2, etc.)
+- Modifying `VIDEO_DIR` in the API routes
+
+### Port Configuration
+
+The application runs on port 3000 by default. Configure via environment variables:
+
+```bash
+PORT=8080
+HOSTNAME="0.0.0.0"
+```
+
+## Health Checks
+
+Verify the deployment is working:
+
+```bash
+curl http://localhost:3000
+```
+
+Test the video download endpoint:
+
+```bash
+curl -X POST http://localhost:3000/api/download \
+  -H "Content-Type: application/json" \
+  -d '{"videoId":"dQw4w9WgXcQ"}'
+```
+
+## Production Checklist
+
+Before deploying to production:
+
+- [ ] Set all required environment variables
+- [ ] Verify `yt-dlp` and `ffmpeg` are installed
+- [ ] Test webcam permissions on your domain (HTTPS required)
+- [ ] Configure CORS if using a separate frontend
+- [ ] Set up monitoring and logging
+- [ ] Review API rate limits for OpenAI, Groq, and xAI
+- [ ] Test the full user flow: download → pose extraction → scoring → report
+
+## Next Steps
+
+- [Environment Variables](/advanced/environment-variables) - Configure API keys
+- [Troubleshooting](/advanced/troubleshooting) - Common deployment issues

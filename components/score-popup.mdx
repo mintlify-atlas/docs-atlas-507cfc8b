@@ -1,0 +1,249 @@
+---
+title: 'ScorePopup'
+description: 'Explosive animated score notifications with particle effects and screen shake'
+---
+
+The `ScorePopup` component displays explosive animated notifications when the user hits choreography frames. It features particle bursts, radial lines, expanding rings, and optional screen shake for high scores.
+
+## Features
+
+- **5 Score Tiers**: Perfect, Great, OK, Almost, Miss (each with unique colors)
+- **Explosive Animations**: Badge slam-in with overshoot, rotation, and blur
+- **Particle Burst**: 8-30 particles exploding radially outward
+- **Radial Lines**: 12 burst lines expanding from center
+- **Expanding Rings**: 2 concentric rings with staggered animation
+- **Screen Shake**: Camera shake effect for Perfect/Great scores
+- **Random Positioning**: Appears in random corner to avoid obstruction
+- **Points Display**: Shows point value below badge (+25, +20, +15, +10, 0)
+
+## Usage
+
+```tsx
+import ScorePopup, { getScoreType, SCORE_POINTS } from "./components/ScorePopup";
+
+function App() {
+  const [scorePopup, setScorePopup] = useState<ScoreType | null>(null);
+  const [points, setPoints] = useState(0);
+
+  const handleFrameHit = (currentScore: number) => {
+    const scoreType = getScoreType(currentScore);
+    const pts = SCORE_POINTS[scoreType];
+    setPoints(pts);
+    setScorePopup(scoreType);
+  };
+
+  return (
+    <ScorePopup
+      score={scorePopup}
+      points={points}
+      onComplete={() => setScorePopup(null)}
+    />
+  );
+}
+```
+
+## Props
+
+<ParamField path="score" type="'perfect' | 'great' | 'ok' | 'almost' | 'miss' | null" required>
+  Score tier to display. Set to null to hide popup. Triggers new animation when value changes.
+</ParamField>
+
+<ParamField path="points" type="number" required>
+  Point value to display below badge. Typically from `SCORE_POINTS[scoreType]`.
+</ParamField>
+
+<ParamField path="onComplete" type="() => void">
+  Callback fired when popup animation completes (after 1.5s display + 0.4s fade).
+</ParamField>
+
+## TypeScript Interface
+
+```typescript
+type ScoreType = "perfect" | "great" | "ok" | "almost" | "miss";
+
+type Props = {
+  score: ScoreType | null;
+  points: number;
+  onComplete?: () => void;
+};
+
+// Point values for each tier (increments of 5)
+export const SCORE_POINTS: Record<ScoreType, number> = {
+  perfect: 25,
+  great: 20,
+  ok: 15,
+  almost: 10,
+  miss: 0,
+};
+
+// Convert numeric score (0-100) to tier
+export function getScoreType(score: number): ScoreType {
+  if (score >= 90) return "perfect";
+  if (score >= 80) return "great";
+  if (score >= 60) return "ok";
+  if (score >= 40) return "almost";
+  return "miss";
+}
+```
+
+## Score Tier Colors
+
+```typescript
+const SCORE_COLORS: Record<ScoreType, {
+  primary: string;    // Main color
+  secondary: string;  // Gradient accent
+  glow: string;       // Shadow color
+  text: string;       // Point label color
+}> = {
+  perfect: {
+    primary: "rgba(57, 255, 20, 1)",      // Neon green
+    secondary: "rgba(0, 255, 170, 1)",
+    glow: "rgba(57, 255, 20, 0.8)",
+    text: "#39ff14",
+  },
+  great: {
+    primary: "rgba(255, 225, 0, 1)",      // Yellow
+    secondary: "rgba(255, 170, 0, 1)",
+    glow: "rgba(255, 225, 0, 0.8)",
+    text: "#ffe100",
+  },
+  ok: {
+    primary: "rgba(0, 180, 255, 1)",      // Cyan
+    secondary: "rgba(0, 255, 255, 1)",
+    glow: "rgba(0, 180, 255, 0.6)",
+    text: "#00b4ff",
+  },
+  almost: {
+    primary: "rgba(255, 100, 0, 1)",      // Orange
+    secondary: "rgba(255, 50, 50, 1)",
+    glow: "rgba(255, 100, 0, 0.6)",
+    text: "#ff6400",
+  },
+  miss: {
+    primary: "rgba(255, 0, 60, 1)",       // Red
+    secondary: "rgba(150, 0, 60, 1)",
+    glow: "rgba(255, 0, 60, 0.5)",
+    text: "#ff003c",
+  },
+};
+```
+
+## Badge Images
+
+Requires PNG images in `/public/score/` directory:
+
+- `/score/perfect.png`
+- `/score/great.png`
+- `/score/ok.png`
+- `/score/almost.png`
+- `/score/miss.png`
+
+Images are rendered at **192px width** with drop-shadow filters.
+
+## Animation Details
+
+### Entry Animation (0.7s cubic-bezier)
+
+```typescript
+@keyframes explosive-bang-in {
+  0% {
+    transform: rotate(Xdeg) scale(0);
+    opacity: 0;
+    filter: blur(20px);
+  }
+  40% {
+    transform: rotate(X+10deg) scale(1.8);  // Overshoot
+    opacity: 1;
+    filter: blur(0);
+  }
+  60% {
+    transform: rotate(X-5deg) scale(1.5);   // Bounce back
+  }
+  80% {
+    transform: rotate(X+3deg) scale(0.85);  // Settle
+  }
+  100% {
+    transform: rotate(Xdeg) scale(1);       // Final
+  }
+}
+```
+
+### Particle Count
+
+- **Perfect/Great**: 30 particles (high score celebration)
+- **Miss**: 8 particles (minimal feedback)
+- **Other**: 20 particles (default)
+
+### Screen Shake
+
+Triggered only for Perfect/Great scores:
+
+```typescript
+@keyframes screen-shake {
+  0%, 100% { transform: translate(0, 0); }
+  10% { transform: translate(-4px, 2px); }
+  20% { transform: translate(4px, -2px); }
+  30% { transform: translate(-3px, -3px); }
+  // ... 10 shake positions over 0.4s
+}
+```
+
+### Timing
+
+- **Display Duration**: 1.5s
+- **Fade Out**: 0.4s
+- **Total**: 1.9s before `onComplete` fires
+
+## Corner Positioning
+
+Randomly selects one of four corners on each display:
+
+```typescript
+type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+const CORNER_POSITIONS: Record<Corner, string> = {
+  "top-left": "top-4 left-4",
+  "top-right": "top-4 right-4",
+  "bottom-left": "bottom-4 left-4",
+  "bottom-right": "bottom-4 right-4",
+};
+```
+
+## Example from page.tsx
+
+```tsx
+// app/page.tsx:1107
+<ScorePopup
+  score={scorePopup}
+  points={scorePopupPoints}
+  onComplete={() => setScorePopup(null)}
+/>
+
+// Frame hit detection (page.tsx:650-670)
+for (let i = 0; i < poseTimeline.length; i++) {
+  if (scoredFramesRef.current.has(i)) continue;
+  const frameTime = poseTimeline[i].time;
+
+  if (t >= frameTime && t < frameTime + 0.2) {
+    const currentScore = Math.round(smoothedScoreRef.current);
+    const scoreType = getScoreType(currentScore);
+    const pts = SCORE_POINTS[scoreType];
+    setScorePopupPoints(pts);
+    setScorePopup(scoreType);
+    setTotalPoints(prev => prev + pts);
+    recordFrameHit(scoreType);
+    break;
+  }
+}
+```
+
+## Related Components
+
+- **Points Counter**: Displays cumulative points in top-right corner (separate component)
+- **Combo Flash**: Shows "5x STREAK" overlay every 5th consecutive non-miss
+- **MoveQueue**: Timeline strip that triggers frame hit detection
+
+## Related Files
+
+- `app/lib/sessionStats.ts` - Records frame hit stats for end-of-session report
+- `app/page.tsx` - Frame hit detection and streak tracking logic
